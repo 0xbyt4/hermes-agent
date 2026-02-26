@@ -581,7 +581,7 @@ class AIAgent:
         if not self._session_db:
             return
         try:
-            start_idx = (len(conversation_history) if conversation_history else 0) + 1
+            start_idx = len(conversation_history) if conversation_history else 0
             for msg in messages[start_idx:]:
                 role = msg.get("role", "unknown")
                 content = msg.get("content")
@@ -929,7 +929,6 @@ class AIAgent:
             return content
         content = convert_scratchpad_to_think(content)
         # Strip extra newlines before/after think blocks
-        import re
         content = re.sub(r'\n+(<think>)', r'\n\1', content)
         content = re.sub(r'(</think>)\n+', r'\1\n', content)
         return content.strip()
@@ -1050,8 +1049,7 @@ class AIAgent:
             self._todo_store.write(last_todo_response, merge=False)
             if not self.quiet_mode:
                 print(f"{self.log_prefix}📋 Restored {len(last_todo_response)} todo item(s) from history")
-        _set_interrupt(False)
-    
+
     @property
     def is_interrupted(self) -> bool:
         """Check if an interrupt has been requested."""
@@ -1290,7 +1288,8 @@ class AIAgent:
             "[System: The session is being compressed. "
             "Please save anything worth remembering to your memories.]"
         )
-        flush_msg = {"role": "user", "content": flush_content}
+        _sentinel = f"__flush_{id(self)}_{time.monotonic()}"
+        flush_msg = {"role": "user", "content": flush_content, "_flush_sentinel": _sentinel}
         messages.append(flush_msg)
 
         try:
@@ -1352,10 +1351,13 @@ class AIAgent:
         except Exception as e:
             logger.debug("Memory flush API call failed: %s", e)
         finally:
-            # Strip flush artifacts: remove everything from the flush message onward
-            while messages and messages[-1] is not flush_msg and len(messages) > 0:
+            # Strip flush artifacts: remove everything from the flush message onward.
+            # Use sentinel marker instead of identity check for robustness.
+            while messages and messages[-1].get("_flush_sentinel") != _sentinel:
                 messages.pop()
-            if messages and messages[-1] is flush_msg:
+                if not messages:
+                    break
+            if messages and messages[-1].get("_flush_sentinel") == _sentinel:
                 messages.pop()
 
     def _compress_context(self, messages: list, system_message: str, *, approx_tokens: int = None) -> tuple:
@@ -1547,12 +1549,19 @@ class AIAgent:
                 try:
                     function_result = handle_function_call(function_name, function_args, effective_task_id)
                     _spinner_result = function_result
+                except Exception as tool_error:
+                    function_result = f"Error executing tool '{function_name}': {tool_error}"
+                    logger.error("handle_function_call raised for %s: %s", function_name, tool_error)
                 finally:
                     tool_duration = time.time() - tool_start_time
                     cute_msg = _get_cute_tool_message_impl(function_name, function_args, tool_duration, result=_spinner_result)
                     spinner.stop(cute_msg)
             else:
-                function_result = handle_function_call(function_name, function_args, effective_task_id)
+                try:
+                    function_result = handle_function_call(function_name, function_args, effective_task_id)
+                except Exception as tool_error:
+                    function_result = f"Error executing tool '{function_name}': {tool_error}"
+                    logger.error("handle_function_call raised for %s: %s", function_name, tool_error)
                 tool_duration = time.time() - tool_start_time
 
             result_preview = function_result[:200] if len(function_result) > 200 else function_result
@@ -1859,7 +1868,7 @@ class AIAgent:
             retry_count = 0
             max_retries = 6  # Increased to allow longer backoff periods
 
-            while retry_count <= max_retries:
+            while retry_count < max_retries:
                 try:
                     api_kwargs = self._build_api_kwargs(api_messages)
 
@@ -1953,6 +1962,7 @@ class AIAgent:
                             if self._interrupt_requested:
                                 print(f"{self.log_prefix}⚡ Interrupt detected during retry wait, aborting.")
                                 self._persist_session(messages, conversation_history)
+                                self.clear_interrupt()
                                 return {
                                     "final_response": "Operation interrupted.",
                                     "messages": messages,
@@ -2055,6 +2065,7 @@ class AIAgent:
                     if self._interrupt_requested:
                         print(f"{self.log_prefix}⚡ Interrupt detected during error handling, aborting retries.")
                         self._persist_session(messages, conversation_history)
+                        self.clear_interrupt()
                         return {
                             "final_response": "Operation interrupted.",
                             "messages": messages,
@@ -2142,6 +2153,7 @@ class AIAgent:
                         if self._interrupt_requested:
                             print(f"{self.log_prefix}⚡ Interrupt detected during retry wait, aborting.")
                             self._persist_session(messages, conversation_history)
+                            self.clear_interrupt()
                             return {
                                 "final_response": "Operation interrupted.",
                                 "messages": messages,
