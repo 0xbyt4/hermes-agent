@@ -487,31 +487,24 @@ class GatewayRunner:
         if not user_id:
             return False
 
-        platform_env_map = {
-            Platform.TELEGRAM: "TELEGRAM_ALLOWED_USERS",
-            Platform.DISCORD: "DISCORD_ALLOWED_USERS",
-            Platform.WHATSAPP: "WHATSAPP_ALLOWED_USERS",
-            Platform.SLACK: "SLACK_ALLOWED_USERS",
-        }
-        platform_allow_all_map = {
-            Platform.TELEGRAM: "TELEGRAM_ALLOW_ALL_USERS",
-            Platform.DISCORD: "DISCORD_ALLOW_ALL_USERS",
-            Platform.WHATSAPP: "WHATSAPP_ALLOW_ALL_USERS",
-            Platform.SLACK: "SLACK_ALLOW_ALL_USERS",
-        }
+        # Derive env var names from platform value (e.g. "telegram" -> "TELEGRAM_ALLOWED_USERS").
+        # This ensures new platforms get auth support automatically without
+        # maintaining a hardcoded dict that silently fails on unknown platforms.
+        platform_name = source.platform.value.upper() if source.platform else ""
+        allow_all_var = f"{platform_name}_ALLOW_ALL_USERS" if platform_name else ""
+        allowed_users_var = f"{platform_name}_ALLOWED_USERS" if platform_name else ""
 
         # Per-platform allow-all flag (e.g., DISCORD_ALLOW_ALL_USERS=true)
-        platform_allow_all_var = platform_allow_all_map.get(source.platform, "")
-        if platform_allow_all_var and os.getenv(platform_allow_all_var, "").lower() in ("true", "1", "yes"):
+        if allow_all_var and os.getenv(allow_all_var, "").lower() in ("true", "1", "yes"):
             return True
 
         # Check pairing store (always checked, regardless of allowlists)
-        platform_name = source.platform.value if source.platform else ""
-        if self.pairing_store.is_approved(platform_name, user_id):
+        platform_key = source.platform.value if source.platform else ""
+        if self.pairing_store.is_approved(platform_key, user_id):
             return True
 
         # Check platform-specific and global allowlists
-        platform_allowlist = os.getenv(platform_env_map.get(source.platform, ""), "").strip()
+        platform_allowlist = os.getenv(allowed_users_var, "").strip() if allowed_users_var else ""
         global_allowlist = os.getenv("GATEWAY_ALLOWED_USERS", "").strip()
 
         if not platform_allowlist and not global_allowlist:
