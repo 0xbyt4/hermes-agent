@@ -16,12 +16,9 @@ The parent's context only sees the delegation call and the summary result,
 never the child's intermediate tool calls or reasoning.
 """
 
-import contextlib
-import io
 import json
 import logging
 import os
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
@@ -99,19 +96,20 @@ def _run_single_child(
     child_prompt = _build_child_system_prompt(goal, context)
 
     # Build a progress callback that surfaces subagent tool activity.
-    # CLI: updates the parent's delegate spinner text.
+    # CLI: prints persistent lines so the user can see what the subagent is doing.
     # Gateway: forwards to the parent's progress callback (feeds message queue).
     parent_progress_cb = getattr(parent_agent, 'tool_progress_callback', None)
+    sub_label = f"sub-{task_index+1}"
     def _child_progress(tool_name: str, preview: str = None):
-        tag = f"[subagent-{task_index+1}] {tool_name}"
-        # Update CLI spinner
-        spinner = getattr(parent_agent, '_delegate_spinner', None)
-        if spinner:
-            detail = f'"{preview}"' if preview else ""
-            try:
-                spinner.update_text(f"🔀 {tag} {detail}")
-            except Exception:
-                pass
+        tag = f"[{sub_label}] {tool_name}"
+        detail = f'"{preview}"' if preview else ""
+        # Print a persistent indented line visible in the CLI.
+        # prompt_toolkit's patch_stdout ensures concurrent writes are safe,
+        # same pattern used by batch mode completion lines (line 328).
+        try:
+            print(f"  ┊  ↳ {tag} {detail}")
+        except Exception:
+            pass
         # Forward to gateway progress queue
         if parent_progress_cb:
             try:
@@ -153,10 +151,10 @@ def _run_single_child(
         if hasattr(parent_agent, '_active_children'):
             parent_agent._active_children.append(child)
 
-        # Run with stdout/stderr suppressed to prevent interleaved output
-        devnull = io.StringIO()
-        with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
-            result = child.run_conversation(user_message=goal)
+        # Let child tool output through -- quiet_mode=True ensures only
+        # formatted tool lines are printed, not raw model output.
+        # prompt_toolkit's patch_stdout handles thread-safe rendering.
+        result = child.run_conversation(user_message=goal)
 
         duration = round(time.monotonic() - child_start, 2)
 
@@ -282,11 +280,6 @@ def delegate_task(
         completed_count = 0
         spinner_ref = getattr(parent_agent, '_delegate_spinner', None)
 
-        # Save stdout/stderr before the executor — redirect_stdout in child
-        # threads races on sys.stdout and can leave it as devnull permanently.
-        _saved_stdout = sys.stdout
-        _saved_stderr = sys.stderr
-
         with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_CHILDREN) as executor:
             futures = {}
             for i, t in enumerate(task_list):
@@ -333,10 +326,6 @@ def delegate_task(
                         spinner_ref.update_text(f"🔀 {remaining} task{'s' if remaining != 1 else ''} remaining")
                     except Exception:
                         pass
-
-        # Restore stdout/stderr in case redirect_stdout race left them as devnull
-        sys.stdout = _saved_stdout
-        sys.stderr = _saved_stderr
 
         # Sort by task_index so results match input order
         results.sort(key=lambda r: r["task_index"])
