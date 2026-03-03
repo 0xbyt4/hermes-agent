@@ -2013,6 +2013,10 @@ class HermesCLI:
 
     def _voice_start_recording(self):
         """Start capturing audio from the microphone."""
+        # Prevent double-start from concurrent threads
+        if self._voice_recording:
+            return
+
         from tools.voice_mode import AudioRecorder, check_voice_requirements
 
         reqs = check_voice_requirements()
@@ -2075,6 +2079,8 @@ class HermesCLI:
 
     def _voice_stop_and_transcribe(self):
         """Stop recording, transcribe via STT, and queue the transcript as input."""
+        submitted = False
+        wav_path = None
         try:
             if self._voice_recorder is None:
                 return
@@ -2115,6 +2121,7 @@ class HermesCLI:
             if result.get("success") and result.get("transcript", "").strip():
                 transcript = result["transcript"].strip()
                 self._pending_input.put(transcript)
+                submitted = True
             elif result.get("success"):
                 _cprint(f"{_DIM}No speech detected.{_RST}")
             else:
@@ -2126,7 +2133,6 @@ class HermesCLI:
         finally:
             with self._voice_lock:
                 self._voice_processing = False
-                submitted = self._pending_input.qsize() > 0
             if hasattr(self, '_app') and self._app:
                 self._app.invalidate()
             # Clean up temp file
@@ -2851,11 +2857,7 @@ class HermesCLI:
             """Toggle voice recording when voice mode is active."""
             if not cli_ref._voice_mode:
                 return
-            if cli_ref._agent_running:
-                return
-            # Block recording during interactive prompts
-            if cli_ref._clarify_state or cli_ref._sudo_state or cli_ref._approval_state:
-                return
+            # Always allow STOPPING a recording (even when agent is running)
             if cli_ref._voice_recording:
                 # Manual stop via Ctrl+R: stop continuous mode
                 with cli_ref._voice_lock:
@@ -2867,6 +2869,11 @@ class HermesCLI:
                     daemon=True,
                 ).start()
             else:
+                # Guard: don't START recording during agent run or interactive prompts
+                if cli_ref._agent_running:
+                    return
+                if cli_ref._clarify_state or cli_ref._sudo_state or cli_ref._approval_state:
+                    return
                 try:
                     # Interrupt TTS if playing, so user can start talking
                     if not cli_ref._voice_tts_done.is_set():
