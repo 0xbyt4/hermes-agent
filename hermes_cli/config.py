@@ -110,6 +110,12 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "model": "whisper-1",
     },
+
+    "voice": {
+        "record_key": "ctrl+space",
+        "max_recording_seconds": 120,
+        "auto_tts": False,
+    },
     
     "human_delay": {
         "mode": "off",
