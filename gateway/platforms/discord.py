@@ -206,7 +206,29 @@ class DiscordAdapter(BasePlatformAdapter):
             
         except Exception as e:
             return SendResult(success=False, error=str(e))
-    
+
+    async def edit_message(
+        self,
+        chat_id: str,
+        message_id: str,
+        content: str,
+    ) -> SendResult:
+        """Edit a previously sent Discord message."""
+        if not self._client:
+            return SendResult(success=False, error="Not connected")
+        try:
+            channel = self._client.get_channel(int(chat_id))
+            if not channel:
+                channel = await self._client.fetch_channel(int(chat_id))
+            msg = await channel.fetch_message(int(message_id))
+            formatted = self.format_message(content)
+            if len(formatted) > self.MAX_MESSAGE_LENGTH:
+                formatted = formatted[:self.MAX_MESSAGE_LENGTH - 3] + "..."
+            await msg.edit(content=formatted)
+            return SendResult(success=True, message_id=message_id)
+        except Exception as e:
+            return SendResult(success=False, error=str(e))
+
     async def send_voice(
         self,
         chat_id: str,
@@ -530,6 +552,16 @@ class DiscordAdapter(BasePlatformAdapter):
             await self.handle_message(event)
             try:
                 await interaction.followup.send("Stop requested~", ephemeral=True)
+            except Exception as e:
+                logger.debug("Discord followup failed: %s", e)
+
+        @tree.command(name="update", description="Update Hermes Agent to the latest version")
+        async def slash_update(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            event = self._build_slash_event(interaction, "/update")
+            await self.handle_message(event)
+            try:
+                await interaction.followup.send("Update initiated~", ephemeral=True)
             except Exception as e:
                 logger.debug("Discord followup failed: %s", e)
 

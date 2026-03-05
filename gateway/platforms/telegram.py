@@ -218,7 +218,36 @@ class TelegramAdapter(BasePlatformAdapter):
             
         except Exception as e:
             return SendResult(success=False, error=str(e))
-    
+
+    async def edit_message(
+        self,
+        chat_id: str,
+        message_id: str,
+        content: str,
+    ) -> SendResult:
+        """Edit a previously sent Telegram message."""
+        if not self._bot:
+            return SendResult(success=False, error="Not connected")
+        try:
+            formatted = self.format_message(content)
+            try:
+                await self._bot.edit_message_text(
+                    chat_id=int(chat_id),
+                    message_id=int(message_id),
+                    text=formatted,
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                )
+            except Exception:
+                # Fallback: retry without markdown formatting
+                await self._bot.edit_message_text(
+                    chat_id=int(chat_id),
+                    message_id=int(message_id),
+                    text=content,
+                )
+            return SendResult(success=True, message_id=message_id)
+        except Exception as e:
+            return SendResult(success=False, error=str(e))
+
     async def send_voice(
         self,
         chat_id: str,
@@ -406,8 +435,10 @@ class TelegramAdapter(BasePlatformAdapter):
         )
 
         # 6) Convert italic: *text* (single asterisk) → _text_ (MarkdownV2 italic)
+        #    [^*\n]+ prevents matching across newlines (which would corrupt
+        #    bullet lists using * markers and multi-line content).
         text = re.sub(
-            r'\*([^*]+)\*',
+            r'\*([^*\n]+)\*',
             lambda m: _ph(f'_{_escape_mdv2(m.group(1))}_'),
             text,
         )

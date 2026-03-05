@@ -2540,6 +2540,7 @@ class HermesCLI:
                     user_message=message,
                     conversation_history=self.conversation_history[:-1],  # Exclude the message we just added
                     stream_callback=stream_callback,
+                    task_id=self.session_id,
                 )
 
             # Start agent in background thread
@@ -2790,7 +2791,7 @@ class HermesCLI:
                     self._interrupt_queue.put(text)
                 else:
                     self._pending_input.put(text)
-                event.app.current_buffer.reset()
+                event.app.current_buffer.reset(append_to_history=True)
         
         @kb.add('escape', 'enter')
         def handle_alt_enter(event):
@@ -2834,6 +2835,24 @@ class HermesCLI:
                 max_idx = len(self._approval_state["choices"]) - 1
                 self._approval_state["selected"] = min(max_idx, self._approval_state["selected"] + 1)
                 event.app.invalidate()
+
+        # --- History navigation: up/down browse history in normal input mode ---
+        # The TextArea is multiline, so by default up/down only move the cursor.
+        # Buffer.auto_up/auto_down handle both: cursor movement when multi-line,
+        # history browsing when on the first/last line (or single-line input).
+        _normal_input = Condition(
+            lambda: not self._clarify_state and not self._approval_state and not self._sudo_state
+        )
+
+        @kb.add('up', filter=_normal_input)
+        def history_up(event):
+            """Up arrow: browse history when on first line, else move cursor up."""
+            event.app.current_buffer.auto_up(count=event.arg)
+
+        @kb.add('down', filter=_normal_input)
+        def history_down(event):
+            """Down arrow: browse history when on last line, else move cursor down."""
+            event.app.current_buffer.auto_down(count=event.arg)
 
         @kb.add('c-c')
         def handle_ctrl_c(event):
@@ -2894,8 +2913,13 @@ class HermesCLI:
                 print("\n⚡ Interrupting agent... (press Ctrl+C again to force exit)")
                 self.agent.interrupt()
             else:
-                self._should_exit = True
-                event.app.exit()
+                # If there's text in the input buffer, clear it (like bash).
+                # If the buffer is already empty, exit.
+                if event.app.current_buffer.text:
+                    event.app.current_buffer.reset()
+                else:
+                    self._should_exit = True
+                    event.app.exit()
         
         @kb.add('c-d')
         def handle_ctrl_d(event):

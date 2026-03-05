@@ -196,8 +196,7 @@ def _find_all_skills() -> List[Dict[str, Any]]:
         return skills
     
     for skill_md in SKILLS_DIR.rglob("SKILL.md"):
-        path_str = str(skill_md)
-        if '/.git/' in path_str or '/.github/' in path_str or '/.hub/' in path_str:
+        if any(part in ('.git', '.github', '.hub') for part in skill_md.parts):
             continue
             
         skill_dir = skill_md.parent
@@ -458,7 +457,7 @@ def skill_view(name: str, file_path: str = None, task_id: str = None) -> str:
             try:
                 resolved = target_file.resolve()
                 skill_dir_resolved = skill_dir.resolve()
-                if not str(resolved).startswith(str(skill_dir_resolved) + "/") and resolved != skill_dir_resolved:
+                if not resolved.is_relative_to(skill_dir_resolved):
                     return json.dumps({
                         "success": False,
                         "error": "Path escapes skill directory boundary.",

@@ -27,7 +27,7 @@ Usage:
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +58,14 @@ def _resolve_stt_provider() -> Tuple[Optional[str], Optional[str], str]:
 
     return None, None, "none"
 
+# Supported audio formats
+SUPPORTED_FORMATS = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".ogg"}
 
-def transcribe_audio(file_path: str, model: Optional[str] = None) -> dict:
+# Maximum file size (25MB - OpenAI limit)
+MAX_FILE_SIZE = 25 * 1024 * 1024
+
+
+def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, Any]:
     """
     Transcribe an audio file using an OpenAI-compatible Whisper API.
 
@@ -86,11 +92,45 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> dict:
         }
 
     audio_path = Path(file_path)
-    if not audio_path.is_file():
+    
+    # Validate file exists
+    if not audio_path.exists():
         return {
             "success": False,
             "transcript": "",
             "error": f"Audio file not found: {file_path}",
+        }
+    
+    if not audio_path.is_file():
+        return {
+            "success": False,
+            "transcript": "",
+            "error": f"Path is not a file: {file_path}",
+        }
+    
+    # Validate file extension
+    if audio_path.suffix.lower() not in SUPPORTED_FORMATS:
+        return {
+            "success": False,
+            "transcript": "",
+            "error": f"Unsupported file format: {audio_path.suffix}. Supported formats: {', '.join(sorted(SUPPORTED_FORMATS))}",
+        }
+    
+    # Validate file size
+    try:
+        file_size = audio_path.stat().st_size
+        if file_size > MAX_FILE_SIZE:
+            return {
+                "success": False,
+                "transcript": "",
+                "error": f"File too large: {file_size / (1024*1024):.1f}MB (max {MAX_FILE_SIZE / (1024*1024)}MB)",
+            }
+    except OSError as e:
+        logger.error("Failed to get file size for %s: %s", file_path, e, exc_info=True)
+        return {
+            "success": False,
+            "transcript": "",
+            "error": f"Failed to access file: {e}",
         }
 
     # Use provided model, or fall back to provider default.
@@ -108,7 +148,7 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> dict:
         model = DEFAULT_STT_MODEL
 
     try:
-        from openai import OpenAI
+        from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
 
         client = OpenAI(api_key=api_key, base_url=base_url)
 
@@ -130,10 +170,38 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> dict:
             "provider": provider,
         }
 
-    except Exception as e:
-        logger.error("Transcription error (%s): %s", provider, e)
+    except PermissionError:
+        logger.error("Permission denied accessing file: %s", file_path, exc_info=True)
         return {
             "success": False,
             "transcript": "",
-            "error": str(e),
+            "error": f"Permission denied: {file_path}",
+        }
+    except APIConnectionError as e:
+        logger.error("API connection error during transcription: %s", e, exc_info=True)
+        return {
+            "success": False,
+            "transcript": "",
+            "error": f"Connection error: {e}",
+        }
+    except APITimeoutError as e:
+        logger.error("API timeout during transcription: %s", e, exc_info=True)
+        return {
+            "success": False,
+            "transcript": "",
+            "error": f"Request timeout: {e}",
+        }
+    except APIError as e:
+        logger.error("OpenAI API error during transcription: %s", e, exc_info=True)
+        return {
+            "success": False,
+            "transcript": "",
+            "error": f"API error: {e}",
+        }
+    except Exception as e:
+        logger.error("Unexpected error during transcription: %s", e, exc_info=True)
+        return {
+            "success": False,
+            "transcript": "",
+            "error": f"Transcription failed: {e}",
         }
