@@ -3335,6 +3335,24 @@ class HermesCLI:
             height=1,
         )
 
+        # Persistent voice mode status bar (visible only when voice mode is on)
+        def _get_voice_status():
+            if cli_ref._voice_recording:
+                return [('class:voice-status-recording', ' ● REC  Ctrl+R to stop ')]
+            if cli_ref._voice_processing:
+                return [('class:voice-status', ' ◉ Transcribing... ')]
+            tts = " | TTS on" if cli_ref._voice_tts else ""
+            cont = " | Continuous" if cli_ref._voice_continuous else ""
+            return [('class:voice-status', f' 🎤 Voice mode{tts}{cont}  —  Ctrl+R to record ')]
+
+        voice_status_bar = ConditionalContainer(
+            Window(
+                FormattedTextControl(_get_voice_status),
+                height=1,
+            ),
+            filter=Condition(lambda: cli_ref._voice_mode),
+        )
+
         # Layout: interactive prompt widgets + ruled input at bottom.
         # The sudo, approval, and clarify widgets appear above the input when
         # the corresponding interactive prompt is active.
@@ -3348,6 +3366,7 @@ class HermesCLI:
                 input_rule_top,
                 input_area,
                 input_rule_bot,
+                voice_status_bar,
                 CompletionsMenu(max_height=12, scroll_offset=1),
             ])
         )
@@ -3390,6 +3409,8 @@ class HermesCLI:
             'voice-prompt': '#87CEEB',
             'voice-recording': '#FF4444 bold',
             'voice-processing': '#FFA500 italic',
+            'voice-status': 'bg:#1a1a2e #87CEEB',
+            'voice-status-recording': 'bg:#1a1a2e #FF4444 bold',
         })
         
         # Create the application
