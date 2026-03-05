@@ -2499,6 +2499,7 @@ class HermesCLI:
             # we stream audio sentence-by-sentence as the agent generates tokens
             # instead of waiting for the full response.
             use_streaming_tts = False
+            _streaming_box_opened = False
             text_queue = None
             tts_thread = None
             stream_callback = None
@@ -2523,9 +2524,21 @@ class HermesCLI:
                 text_queue = queue.Queue()
                 stop_event = threading.Event()
 
+                def display_callback(sentence: str):
+                    """Called by TTS consumer when a sentence is ready to display + speak."""
+                    nonlocal _streaming_box_opened
+                    if not _streaming_box_opened:
+                        _streaming_box_opened = True
+                        w = self.console.width
+                        label = " ⚕ Hermes "
+                        fill = w - 2 - len(label)
+                        _cprint(f"\n{_GOLD}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}")
+                    _cprint(sentence.rstrip())
+
                 tts_thread = threading.Thread(
                     target=stream_tts_to_speaker,
                     args=(text_queue, stop_event, self._voice_tts_done),
+                    kwargs={"display_callback": display_callback},
                     daemon=True,
                 )
                 tts_thread.start()
@@ -2612,15 +2625,20 @@ class HermesCLI:
                     response = response + "\n\n---\n_[Interrupted - processing new message]_"
 
             if response:
-                w = self.console.width
-                label = " ⚕ Hermes "
-                fill = w - 2 - len(label)  # 2 for ╭ and ╮
-                top = f"{_GOLD}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}"
-                bot = f"{_GOLD}╰{'─' * (w - 2)}╯{_RST}"
+                if use_streaming_tts and _streaming_box_opened:
+                    # Text was already printed sentence-by-sentence; just close the box
+                    w = self.console.width
+                    _cprint(f"\n{_GOLD}╰{'─' * (w - 2)}╯{_RST}")
+                else:
+                    w = self.console.width
+                    label = " ⚕ Hermes "
+                    fill = w - 2 - len(label)  # 2 for ╭ and ╮
+                    top = f"{_GOLD}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}"
+                    bot = f"{_GOLD}╰{'─' * (w - 2)}╯{_RST}"
 
-                # Render box + response as a single _cprint call so
-                # nothing can interleave between the box borders.
-                _cprint(f"\n{top}\n{response}\n\n{bot}")
+                    # Render box + response as a single _cprint call so
+                    # nothing can interleave between the box borders.
+                    _cprint(f"\n{top}\n{response}\n\n{bot}")
 
             # Speak response aloud if voice TTS is enabled
             # Skip batch TTS when streaming TTS already handled it
