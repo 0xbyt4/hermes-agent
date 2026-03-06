@@ -2725,8 +2725,10 @@ class HermesCLI:
             # Get the final response
             response = result.get("final_response", "") if result else ""
 
-            # Handle failed results (e.g., non-retryable errors like invalid model)
-            if result and result.get("failed") and not response:
+            # Handle failed or partial results (e.g., non-retryable errors, rate limits,
+            # truncated output, invalid tool calls). Both "failed" and "partial" with
+            # an empty final_response mean the agent couldn't produce a usable answer.
+            if result and (result.get("failed") or result.get("partial")) and not response:
                 error_detail = result.get("error", "Unknown error")
                 response = f"Error: {error_detail}"
                 # Stop continuous voice mode on persistent errors (e.g. 429 rate limit)
@@ -2745,7 +2747,8 @@ class HermesCLI:
             
 
             if response:
-                if use_streaming_tts and _streaming_box_opened:
+                is_error_response = result and (result.get("failed") or result.get("partial"))
+                if use_streaming_tts and _streaming_box_opened and not is_error_response:
                     # Text was already printed sentence-by-sentence; just close the box
                     w = shutil.get_terminal_size().columns
                     _cprint(f"\n{_GOLD}╰{'─' * (w - 2)}╯{_RST}")
