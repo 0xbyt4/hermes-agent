@@ -50,7 +50,7 @@ pty = ["ptyprocess>=0.7.0"]
 honcho = ["honcho-ai>=2.0.1"]
 mcp = ["mcp>=1.2.0"]
 homeassistant = ["aiohttp>=3.9.0"]
-yc-bench = ["yc-bench @ git+https://github.com/collinear-ai/yc-bench.git"]
+yc-bench = ["yc-bench @ git+https://github.com/collinear-ai/yc-bench.git ; python_version >= '3.12'"]
 all = [
   "hermes-agent[modal]",
   "hermes-agent[daytona]",
