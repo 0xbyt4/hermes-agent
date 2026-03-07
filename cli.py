@@ -1903,16 +1903,16 @@ class HermesCLI:
 
         # Build a lightweight LLM move function using the auxiliary client
         def agent_move_fn(prompt: str) -> str:
+            from agent.auxiliary_client import get_text_auxiliary_client
+            client, model = get_text_auxiliary_client()
+            if client is None:
+                return ""
+            import os as _os
+            game_model = _os.getenv("LLM_MODEL", model)
             try:
-                from agent.auxiliary_client import get_text_auxiliary_client
-                client, model = get_text_auxiliary_client()
-                if client is None:
-                    return ""
                 response = client.chat.completions.create(
-                    model=model,
+                    model=game_model,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=10,
-                    temperature=0.3,
                 )
                 return response.choices[0].message.content or ""
             except Exception:
