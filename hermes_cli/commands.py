@@ -29,6 +29,7 @@ COMMANDS = {
     "/compress": "Manually compress conversation context (flush memories + summarize)",
     "/usage": "Show token usage for the current session",
     "/voice": "Toggle voice mode (Ctrl+R to record). Usage: /voice [on|off|tts|status]",
+    "/insights": "Show usage insights and analytics (last 30 days)",
     "/quit": "Exit the CLI (also: /exit, /q)",
 }
 
