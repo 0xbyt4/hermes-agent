@@ -131,6 +131,8 @@ class RunState:
     api_process: Optional[subprocess.Popen] = None
     trainer_process: Optional[subprocess.Popen] = None
     env_process: Optional[subprocess.Popen] = None
+    # Log file handles (must be closed when stopping)
+    _log_files: List = field(default_factory=list)
 
 
 # Global state
@@ -324,6 +326,7 @@ async def _spawn_training_run(run_state: RunState, config_path: Path):
         print(f"[{run_id}] Starting Atropos API server (run-api)...")
         
         api_log_file = open(api_log, "w")
+        run_state._log_files.append(api_log_file)
         run_state.api_process = subprocess.Popen(
             ["run-api"],
             stdout=api_log_file,
@@ -337,6 +340,7 @@ async def _spawn_training_run(run_state: RunState, config_path: Path):
         if run_state.api_process.poll() is not None:
             run_state.status = "failed"
             run_state.error_message = f"API server exited with code {run_state.api_process.returncode}. Check {api_log}"
+            _stop_training_run(run_state)
             return
         
         print(f"[{run_id}] Atropos API server started")
@@ -345,6 +349,7 @@ async def _spawn_training_run(run_state: RunState, config_path: Path):
         print(f"[{run_id}] Starting Tinker trainer: launch_training.py --config {config_path}")
         
         trainer_log_file = open(trainer_log, "w")
+        run_state._log_files.append(trainer_log_file)
         run_state.trainer_process = subprocess.Popen(
             [sys.executable, "launch_training.py", "--config", str(config_path)],
             stdout=trainer_log_file,
@@ -360,8 +365,7 @@ async def _spawn_training_run(run_state: RunState, config_path: Path):
         if run_state.trainer_process.poll() is not None:
             run_state.status = "failed"
             run_state.error_message = f"Trainer exited with code {run_state.trainer_process.returncode}. Check {trainer_log}"
-            if run_state.api_process:
-                run_state.api_process.terminate()
+            _stop_training_run(run_state)
             return
         
         print(f"[{run_id}] Trainer started, inference server on port 8001")
@@ -380,11 +384,13 @@ async def _spawn_training_run(run_state: RunState, config_path: Path):
         if not env_info:
             run_state.status = "failed"
             run_state.error_message = f"Environment '{run_state.environment}' not found"
+            _stop_training_run(run_state)
             return
         
         print(f"[{run_id}] Starting environment: {env_info.file_path} serve")
         
         env_log_file = open(env_log, "w")
+        run_state._log_files.append(env_log_file)
         run_state.env_process = subprocess.Popen(
             [sys.executable, str(env_info.file_path), "serve", "--config", str(config_path)],
             stdout=env_log_file,
@@ -398,10 +404,7 @@ async def _spawn_training_run(run_state: RunState, config_path: Path):
         if run_state.env_process.poll() is not None:
             run_state.status = "failed"
             run_state.error_message = f"Environment exited with code {run_state.env_process.returncode}. Check {env_log}"
-            if run_state.trainer_process:
-                run_state.trainer_process.terminate()
-            if run_state.api_process:
-                run_state.api_process.terminate()
+            _stop_training_run(run_state)
             return
         
         run_state.status = "running"
@@ -477,6 +480,14 @@ def _stop_training_run(run_state: RunState):
         except subprocess.TimeoutExpired:
             run_state.api_process.kill()
     
+    # Close leaked log file handles
+    for fh in run_state._log_files:
+        try:
+            fh.close()
+        except Exception:
+            pass
+    run_state._log_files.clear()
+
     if run_state.status == "running":
         run_state.status = "stopped"
 
