@@ -4398,9 +4398,17 @@ class AIAgent:
         if final_response and not interrupted:
             self._honcho_sync(original_user_message, final_response)
 
+        # Extract reasoning from the last assistant message (if any)
+        last_reasoning = None
+        for msg in reversed(messages):
+            if msg.get("role") == "assistant" and msg.get("reasoning"):
+                last_reasoning = msg["reasoning"]
+                break
+
         # Build result with interrupt info if applicable
         result = {
             "final_response": final_response,
+            "last_reasoning": last_reasoning,
             "messages": messages,
             "api_calls": api_call_count,
             "completed": completed,

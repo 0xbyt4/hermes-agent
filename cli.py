@@ -1103,6 +1103,8 @@ class HermesCLI:
         self.resume_display = CLI_CONFIG["display"].get("resume_display", "full")
         # bell_on_complete: play terminal bell (\a) when agent finishes a response
         self.bell_on_complete = CLI_CONFIG["display"].get("bell_on_complete", False)
+        # show_reasoning: display model thinking/reasoning before the response
+        self.show_reasoning = CLI_CONFIG["display"].get("show_reasoning", False)
         self.verbose = verbose if verbose is not None else (self.tool_progress_mode == "verbose")
         
         # Configuration - priority: CLI args > env vars > config file
@@ -2755,6 +2757,8 @@ class HermesCLI:
             self._show_gateway_status()
         elif cmd_lower == "/verbose":
             self._toggle_verbose()
+        elif cmd_lower.startswith("/reasoning"):
+            self._toggle_reasoning(cmd_original)
         elif cmd_lower == "/compress":
             self._manual_compress()
         elif cmd_lower == "/usage":
@@ -2846,6 +2850,26 @@ class HermesCLI:
             "verbose": "[bold green]Tool progress: VERBOSE[/] — full args, results, and debug logs.",
         }
         self.console.print(labels.get(self.tool_progress_mode, ""))
+
+    def _toggle_reasoning(self, cmd: str):
+        """Toggle or set reasoning display. Usage: /reasoning [on|off]"""
+        parts = cmd.strip().split()
+        if len(parts) >= 2:
+            arg = parts[1].lower()
+            if arg == "on":
+                self.show_reasoning = True
+            elif arg == "off":
+                self.show_reasoning = False
+            else:
+                _cprint(f"  {_DIM}Usage: /reasoning [on|off]{_RST}")
+                return
+        else:
+            self.show_reasoning = not self.show_reasoning
+
+        state = "ON" if self.show_reasoning else "OFF"
+        _cprint(f"  {_GOLD}Reasoning display: {state}{_RST}")
+        if self.show_reasoning:
+            _cprint(f"  {_DIM}Model thinking will be shown before each response.{_RST}")
 
     def _manual_compress(self):
         """Manually trigger context compression on the current conversation."""
@@ -3296,6 +3320,24 @@ class HermesCLI:
                 if response and pending_message:
                     response = response + "\n\n---\n_[Interrupted - processing new message]_"
             
+            # Display reasoning (thinking) if enabled and available
+            if self.show_reasoning and result:
+                reasoning = result.get("last_reasoning")
+                if reasoning:
+                    w = shutil.get_terminal_size().columns
+                    r_label = " Reasoning "
+                    r_fill = w - 2 - len(r_label)
+                    r_top = f"{_DIM}┌─{r_label}{'─' * max(r_fill - 1, 0)}┐{_RST}"
+                    r_bot = f"{_DIM}└{'─' * (w - 2)}┘{_RST}"
+                    # Collapse long reasoning: show first 10 lines
+                    lines = reasoning.strip().splitlines()
+                    if len(lines) > 10:
+                        display_reasoning = "\n".join(lines[:10])
+                        display_reasoning += f"\n{_DIM}  ... ({len(lines) - 10} more lines){_RST}"
+                    else:
+                        display_reasoning = reasoning.strip()
+                    _cprint(f"\n{r_top}\n{_DIM}{display_reasoning}{_RST}\n{r_bot}")
+
             if response:
                 w = shutil.get_terminal_size().columns
                 # Use skin branding for response box label

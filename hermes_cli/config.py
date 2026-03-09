@@ -123,6 +123,7 @@ DEFAULT_CONFIG = {
         "resume_display": "full",
         "bell_on_complete": False,
         "skin": "default",
+        "show_reasoning": False,
     },
     
     # Text-to-speech configuration
