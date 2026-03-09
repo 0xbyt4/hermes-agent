@@ -953,6 +953,14 @@ def show_config():
     print(f"  Max turns:    {config.get('max_turns', 100)}")
     print(f"  Toolsets:     {', '.join(config.get('toolsets', ['all']))}")
     
+    # Display
+    print()
+    print(color("◆ Display", Colors.CYAN, Colors.BOLD))
+    display = config.get('display', {})
+    print(f"  Personality:  {display.get('personality', 'kawaii')}")
+    print(f"  Reasoning:    {'on' if display.get('show_reasoning', False) else 'off'}")
+    print(f"  Bell:         {'on' if display.get('bell_on_complete', False) else 'off'}")
+
     # Terminal
     print()
     print(color("◆ Terminal", Colors.CYAN, Colors.BOLD))

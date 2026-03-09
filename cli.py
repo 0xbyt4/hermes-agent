@@ -1435,6 +1435,7 @@ class HermesCLI:
                 platform="cli",
                 session_db=self._session_db,
                 clarify_callback=self._clarify_callback,
+                reasoning_callback=self._on_reasoning if self.show_reasoning else None,
                 honcho_session_key=self.session_id,
                 fallback_model=self._fallback_model,
                 thinking_callback=self._on_thinking,
@@ -2866,10 +2867,24 @@ class HermesCLI:
         else:
             self.show_reasoning = not self.show_reasoning
 
+        # Update agent callback to match new state
+        if self.agent:
+            self.agent.reasoning_callback = self._on_reasoning if self.show_reasoning else None
+
         state = "ON" if self.show_reasoning else "OFF"
         _cprint(f"  {_GOLD}Reasoning display: {state}{_RST}")
         if self.show_reasoning:
-            _cprint(f"  {_DIM}Model thinking will be shown before each response.{_RST}")
+            _cprint(f"  {_DIM}Model thinking will be shown during and after each response.{_RST}")
+
+    def _on_reasoning(self, reasoning_text: str):
+        """Callback for intermediate reasoning display during tool-call loops."""
+        lines = reasoning_text.strip().splitlines()
+        if len(lines) > 5:
+            preview = "\n".join(lines[:5])
+            preview += f"\n  ... ({len(lines) - 5} more lines)"
+        else:
+            preview = reasoning_text.strip()
+        _cprint(f"  {_DIM}[thinking] {preview}{_RST}")
 
     def _manual_compress(self):
         """Manually trigger context compression on the current conversation."""

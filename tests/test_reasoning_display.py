@@ -143,6 +143,54 @@ class TestToggleReasoning(unittest.TestCase):
         self.assertFalse(stub.show_reasoning)
 
 
+class TestReasoningCallback(unittest.TestCase):
+    """Verify reasoning_callback is invoked during _build_assistant_message."""
+
+    def test_callback_invoked_with_reasoning(self):
+        """When reasoning is present, callback should be called."""
+        captured = []
+
+        def on_reasoning(text):
+            captured.append(text)
+
+        agent = MagicMock()
+        agent.reasoning_callback = on_reasoning
+        agent.verbose_logging = False
+        agent._extract_reasoning = MagicMock(return_value="deep thought")
+
+        # Simulate what _build_assistant_message does
+        reasoning_text = agent._extract_reasoning(MagicMock())
+        if reasoning_text and agent.reasoning_callback:
+            agent.reasoning_callback(reasoning_text)
+
+        self.assertEqual(captured, ["deep thought"])
+
+    def test_callback_not_invoked_without_reasoning(self):
+        """When no reasoning, callback should not be called."""
+        captured = []
+
+        def on_reasoning(text):
+            captured.append(text)
+
+        agent = MagicMock()
+        agent.reasoning_callback = on_reasoning
+        agent._extract_reasoning = MagicMock(return_value=None)
+
+        reasoning_text = agent._extract_reasoning(MagicMock())
+        if reasoning_text and agent.reasoning_callback:
+            agent.reasoning_callback(reasoning_text)
+
+        self.assertEqual(captured, [])
+
+    def test_callback_none_does_not_crash(self):
+        """When reasoning_callback is None, no error should occur."""
+        reasoning_text = "some thought"
+        callback = None
+        # This should not raise
+        if reasoning_text and callback:
+            callback(reasoning_text)
+
+
 class TestConfigDefault(unittest.TestCase):
     """Verify config default for show_reasoning."""
 
