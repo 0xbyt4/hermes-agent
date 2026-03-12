@@ -93,31 +93,29 @@ class TestRealSubagentInterrupt(unittest.TestCase):
                     mock_client.close = MagicMock()
                     MockOpenAI.return_value = mock_client
 
-                    # Also need to patch the system prompt builder
-                    with patch('run_agent.build_system_prompt', return_value="You are a test agent"):
-                        # Signal when child starts
-                        original_run = AIAgent.run_conversation
+                    # Signal when child starts
+                    original_run = AIAgent.run_conversation
 
-                        def patched_run(self_agent, *args, **kwargs):
-                            child_started.set()
-                            return original_run(self_agent, *args, **kwargs)
+                    def patched_run(self_agent, *args, **kwargs):
+                        child_started.set()
+                        return original_run(self_agent, *args, **kwargs)
 
-                        with patch.object(AIAgent, 'run_conversation', patched_run):
-                            result = _run_single_child(
-                                task_index=0,
-                                goal="Test task",
-                                context=None,
-                                toolsets=["terminal"],
-                                model="test/model",
-                                max_iterations=5,
-                                parent_agent=parent,
-                                task_count=1,
-                                override_provider="test",
-                                override_base_url="http://localhost:1",
-                                override_api_key="test",
-                                override_api_mode="chat_completions",
-                            )
-                            result_holder[0] = result
+                    with patch.object(AIAgent, 'run_conversation', patched_run):
+                        result = _run_single_child(
+                            task_index=0,
+                            goal="Test task",
+                            context=None,
+                            toolsets=["terminal"],
+                            model="test/model",
+                            max_iterations=5,
+                            parent_agent=parent,
+                            task_count=1,
+                            override_provider="test",
+                            override_base_url="http://localhost:1",
+                            override_api_key="test",
+                            override_api_mode="chat_completions",
+                        )
+                        result_holder[0] = result
             except Exception as e:
                 import traceback
                 traceback.print_exc()
