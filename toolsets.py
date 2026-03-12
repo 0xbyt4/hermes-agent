@@ -72,8 +72,8 @@ _HERMES_CORE_TOOLS = [
 TOOLSETS = {
     # Basic toolsets - individual tool categories
     "web": {
-        "description": "Web research and content extraction tools",
-        "tools": ["web_search", "web_extract"],
+        "description": "Web research, content extraction, and site crawling tools",
+        "tools": ["web_search", "web_extract", "web_crawl"],
         "includes": []  # No other toolsets included
     },
     

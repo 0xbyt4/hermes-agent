@@ -1251,6 +1251,35 @@ WEB_EXTRACT_SCHEMA = {
     }
 }
 
+WEB_CRAWL_SCHEMA = {
+    "name": "web_crawl",
+    "description": (
+        "Crawl an entire website starting from a URL. Discovers pages via sitemaps and links, "
+        "then returns their content as markdown. Use this when you need information spread across "
+        "multiple pages of a site (e.g. documentation, blog archives). "
+        "Returns up to 20 pages by default. For single pages, use web_extract instead."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "The starting URL to crawl (e.g. 'docs.example.com' or 'https://example.com/docs')"
+            },
+            "instructions": {
+                "type": "string",
+                "description": "Optional instructions for what to focus on during crawling"
+            },
+            "depth": {
+                "type": "string",
+                "enum": ["basic", "advanced"],
+                "description": "Crawl depth: 'basic' (default, up to 20 pages) or 'advanced' (deeper crawl)"
+            }
+        },
+        "required": ["url"]
+    }
+}
+
 registry.register(
     name="web_search",
     toolset="web",
@@ -1265,6 +1294,19 @@ registry.register(
     schema=WEB_EXTRACT_SCHEMA,
     handler=lambda args, **kw: web_extract_tool(
         args.get("urls", [])[:5] if isinstance(args.get("urls"), list) else [], "markdown"),
+    check_fn=check_firecrawl_api_key,
+    requires_env=["FIRECRAWL_API_KEY"],
+    is_async=True,
+)
+registry.register(
+    name="web_crawl",
+    toolset="web",
+    schema=WEB_CRAWL_SCHEMA,
+    handler=lambda args, **kw: web_crawl_tool(
+        args.get("url", ""),
+        instructions=args.get("instructions"),
+        depth=args.get("depth", "basic"),
+    ),
     check_fn=check_firecrawl_api_key,
     requires_env=["FIRECRAWL_API_KEY"],
     is_async=True,
