@@ -256,6 +256,7 @@ function handleResponse(data) {
             const url = m.url ? (m.url.startsWith('http') ? m.url : `${API_BASE}${m.url}`) : null;
             if (m.type === 'audio' && url) playTtsAndMaybeRestart(url);
             else if (m.type === 'image' && url) addImageMessage(url, m.caption);
+            else if (m.type === 'video' && url) addVideoMessage(url, m.caption);
             else if (m.type === 'document' && url) addDocumentMessage(url, m.filename || 'file', m.caption);
         });
     }
@@ -429,15 +430,36 @@ async function sendVoice(blob) {
 
 async function uploadFile(el) {
     const file = el.files[0]; if (!file) return; el.value = '';
-    addUserMessage(`[File: ${file.name}]`);
+
+    // Show preview for images
+    if (file.type.startsWith('image/')) {
+        const url = URL.createObjectURL(file);
+        addUserImageMessage(url, file.name);
+    } else {
+        addUserMessage(`[File: ${file.name}]`);
+    }
+
     try {
         const form = new FormData(); form.append('file', file);
         const resp = await fetch(`${API_BASE}/v1/upload`, {
             method: 'POST', headers: { 'Authorization': `Bearer ${apiKey}` }, body: form,
         });
-        if (resp.ok) { const d = await resp.json(); addSystemMessage(`Uploaded: ${d.filename}`); }
-        else addSystemMessage('Upload failed');
-    } catch (e) { addSystemMessage('Upload failed'); }
+        if (!resp.ok) { addSystemMessage('Upload failed'); return; }
+        const d = await resp.json();
+
+        // Send the uploaded file URL to the agent as a message
+        showTyping();
+        const chatResp = await fetch(`${API_BASE}/v1/chat`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: `[User uploaded file: ${d.filename} (${d.content_type})] ${d.url}`, session_id: sessionId }),
+        });
+        hideTyping();
+        if (chatResp.ok) {
+            const chatData = await chatResp.json();
+            handleResponse(chatData);
+        }
+    } catch (e) { hideTyping(); addSystemMessage('Upload failed'); }
 }
 
 // ── Messages ───────────────────────────────────────────────────────
@@ -498,11 +520,31 @@ function addBotMessage(content) {
     messagesEl.insertBefore(div, typingEl); scrollToBottom(); saveHistory('bot', content);
 }
 
+function addUserImageMessage(url, filename) {
+    const div = document.createElement('div'); div.className = 'msg user';
+    const img = document.createElement('img');
+    img.src = url; img.style.cssText = 'max-width:100%;max-height:200px;border-radius:10px;cursor:pointer';
+    img.onclick = () => window.open(url, '_blank');
+    div.appendChild(img);
+    if (filename) { const label = document.createElement('div'); label.style.cssText = 'font-size:11px;opacity:0.7;margin-top:4px'; label.textContent = filename; div.appendChild(label); }
+    messagesEl.insertBefore(div, typingEl); scrollToBottom(); saveHistory('user', `[Image: ${filename}]`);
+}
+
 function addImageMessage(url, caption) {
     const div = document.createElement('div'); div.className = 'msg bot';
     if (caption) div.innerHTML = renderMarkdown(caption);
     const img = document.createElement('img'); img.src = url; img.onclick = () => window.open(url, '_blank');
     div.appendChild(img);
+    messagesEl.insertBefore(div, typingEl); scrollToBottom();
+}
+
+function addVideoMessage(url, caption) {
+    const div = document.createElement('div'); div.className = 'msg bot';
+    if (caption) div.innerHTML = renderMarkdown(caption);
+    const video = document.createElement('video');
+    video.src = url; video.controls = true; video.preload = 'metadata';
+    video.style.cssText = 'max-width:100%;border-radius:10px;margin:8px 0';
+    div.appendChild(video);
     messagesEl.insertBefore(div, typingEl); scrollToBottom();
 }
 
