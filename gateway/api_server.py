@@ -37,6 +37,47 @@ logger = logging.getLogger(__name__)
 
 RESPONSE_TIMEOUT = int(os.getenv("API_RESPONSE_TIMEOUT", "300"))
 
+
+# ── Simple in-memory rate limiter (no external dependency) ────────────
+
+class _RateLimiter:
+    """Token bucket rate limiter keyed by endpoint name."""
+
+    def __init__(self):
+        self._buckets: Dict[str, list] = {}  # key -> [tokens, last_refill_time]
+        self._limits = {
+            "chat": (10, 60),       # 10 requests per 60 seconds
+            "voice": (10, 60),
+            "upload": (20, 60),
+        }
+
+    def check(self, endpoint: str) -> bool:
+        """Return True if request is allowed, False if rate limited."""
+        import time as _time
+        if endpoint not in self._limits:
+            return True
+        max_tokens, window = self._limits[endpoint]
+        now = _time.monotonic()
+
+        if endpoint not in self._buckets:
+            self._buckets[endpoint] = [max_tokens - 1, now]
+            return True
+
+        bucket = self._buckets[endpoint]
+        elapsed = now - bucket[1]
+        # Refill tokens based on elapsed time
+        bucket[0] = min(max_tokens, bucket[0] + elapsed * (max_tokens / window))
+        bucket[1] = now
+
+        if bucket[0] >= 1:
+            bucket[0] -= 1
+            return True
+        return False
+
+
+_rate_limiter = _RateLimiter()
+
+
 # Media file token signing — prevents path traversal by signing the full path
 _MEDIA_SECRET = secrets.token_hex(32)  # Separate from API_KEY, regenerated per process
 
@@ -138,6 +179,8 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
 
     @app.post("/v1/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest, _: None = Depends(verify_api_key)) -> ChatResponse:
+        if not _rate_limiter.check("chat"):
+            raise HTTPException(429, "Rate limited. Please slow down.")
         sid = req.session_id or str(uuid4())
         return await _collect_response(sid, req.message)
 
@@ -242,6 +285,8 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
         Accepted for any file type. Max 25 MB.
         Use the returned ``url`` in chat messages or for voice input.
         """
+        if not _rate_limiter.check("upload"):
+            raise HTTPException(429, "Rate limited. Please slow down.")
         data = await _read_upload_safe(file, _MAX_UPLOAD_BYTES)
 
         _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -271,6 +316,8 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
         The audio is transcribed via the configured STT provider, then the
         transcript is sent to the agent as a voice message.
         """
+        if not _rate_limiter.check("voice"):
+            raise HTTPException(429, "Rate limited. Please slow down.")
         data = await _read_upload_safe(file, _MAX_UPLOAD_BYTES)
 
         # Save to temp file for transcription

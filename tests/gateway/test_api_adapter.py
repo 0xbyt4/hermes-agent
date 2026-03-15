@@ -1358,6 +1358,76 @@ class TestSecurityFixes:
         assert "addUserMessage(m.content, false)" in html
 
 
+# ── Rate limiting tests ──────────────────────────────────────────────────
+
+
+class TestRateLimiter:
+    def test_rate_limiter_allows_initial_requests(self):
+        from gateway.api_server import _RateLimiter
+        rl = _RateLimiter()
+        # First 10 requests should pass
+        for _ in range(10):
+            assert rl.check("chat") is True
+
+    def test_rate_limiter_blocks_after_limit(self):
+        from gateway.api_server import _RateLimiter
+        rl = _RateLimiter()
+        # Exhaust all tokens
+        for _ in range(10):
+            rl.check("chat")
+        # Next should be blocked
+        assert rl.check("chat") is False
+
+    def test_rate_limiter_unknown_endpoint_allowed(self):
+        from gateway.api_server import _RateLimiter
+        rl = _RateLimiter()
+        assert rl.check("unknown_endpoint") is True
+
+    def test_rate_limiter_refills_over_time(self):
+        import time
+        from gateway.api_server import _RateLimiter
+        rl = _RateLimiter()
+        # Exhaust tokens
+        for _ in range(10):
+            rl.check("chat")
+        assert rl.check("chat") is False
+        # Manually advance the bucket's last refill time
+        rl._buckets["chat"][1] -= 10  # simulate 10 seconds passing
+        assert rl.check("chat") is True  # should have refilled some tokens
+
+    def test_chat_endpoint_returns_429_when_limited(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app, _rate_limiter
+
+        adapter = _make_adapter()
+
+        async def fake_handle(session_id, message, user_id=None):
+            key = adapter._build_session_key(session_id)
+            q = adapter._response_queues.get(key)
+            if q:
+                await q.put({"type": "message", "content": "ok"})
+                await q.put({"type": "done"})
+
+        adapter.handle_request = fake_handle
+        app = create_app(adapter)
+        client = TestClient(app)
+
+        # Reset rate limiter
+        _rate_limiter._buckets.clear()
+
+        with patch.dict(os.environ, {"API_KEY": "test-key"}):
+            # Send 10 requests (should pass)
+            for i in range(10):
+                resp = client.post("/v1/chat", json={"message": f"msg {i}"},
+                                   headers={"Authorization": "Bearer test-key"})
+                assert resp.status_code == 200
+
+            # 11th should be rate limited
+            resp = client.post("/v1/chat", json={"message": "too many"},
+                               headers={"Authorization": "Bearer test-key"})
+            assert resp.status_code == 429
+
+
 class TestToolsetWiring:
     def test_hermes_api_toolset_exists(self):
         from toolsets import TOOLSETS
