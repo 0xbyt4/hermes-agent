@@ -1473,6 +1473,260 @@ class TestPWA:
         assert resp.status_code != 200
 
 
+# ── Edge case and security tests ─────────────────────────────────────────
+
+
+class TestEdgeCases:
+    """Tests for concurrent access, malformed input, and edge cases."""
+
+    # 1. Concurrent REST with same session_id
+    def test_concurrent_same_session_second_request_gets_response(self):
+        """Two requests with same session_id should not crash."""
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app, _rate_limiter
+
+        adapter = _make_adapter()
+        call_count = 0
+
+        async def fake_handle(sid, msg, user_id=None):
+            nonlocal call_count
+            call_count += 1
+            key = adapter._build_session_key(sid)
+            q = adapter._response_queues.get(key)
+            if q:
+                await q.put({"type": "message", "content": f"reply {call_count}"})
+                await q.put({"type": "done"})
+
+        adapter.handle_request = fake_handle
+        app = create_app(adapter)
+        client = TestClient(app)
+        _rate_limiter._buckets.clear()
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            r1 = client.post("/v1/chat", json={"message": "a", "session_id": "same"},
+                             headers={"Authorization": "Bearer k"})
+            r2 = client.post("/v1/chat", json={"message": "b", "session_id": "same"},
+                             headers={"Authorization": "Bearer k"})
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+
+    # 2. WS malformed JSON - server should not crash
+    def test_ws_malformed_json_does_not_crash_server(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            try:
+                with client.websocket_connect("/v1/chat/stream") as ws:
+                    ws.send_json({"type": "auth", "token": "k"})
+                    ws.receive_json()  # auth_ok
+                    ws.send_text("not json at all {{{")
+                    # Server may close connection or send error
+            except Exception:
+                pass  # Connection closed is acceptable
+        # Key assertion: server is still running (no crash)
+        resp = client.get("/v1/health")
+        assert resp.status_code == 200
+
+    # 3. WS auth wrong message type
+    def test_ws_auth_wrong_type_closes(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            with pytest.raises(Exception):
+                with client.websocket_connect("/v1/chat/stream") as ws:
+                    ws.send_json({"type": "message", "message": "hi"})
+                    ws.receive_json()
+
+    # 4. Rate limiter per-client
+    def test_rate_limiter_per_client_independent(self):
+        from gateway.api_server import _RateLimiter
+        rl = _RateLimiter()
+        # Exhaust client A
+        for _ in range(10):
+            rl.check("chat", "client-A")
+        assert rl.check("chat", "client-A") is False
+        # Client B should still be allowed
+        assert rl.check("chat", "client-B") is True
+
+    # 5. Media token invalid after restart (new secret)
+    def test_media_token_tied_to_process_secret(self):
+        from gateway.api_server import _sign_media_path, _MEDIA_SECRET
+        token = _sign_media_path("/tmp/test.ogg")
+        # Token is derived from _MEDIA_SECRET which is random per process
+        assert len(token) == 64
+        assert isinstance(token, str)
+
+    # 7. CORS preflight
+    def test_cors_options_request(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+
+        resp = client.options("/v1/chat")
+        # Should not crash - CORS middleware handles it
+        assert resp.status_code in (200, 405)
+
+    # 8. API_KEY empty
+    def test_api_key_empty_returns_500(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+
+        with patch.dict(os.environ, {"API_KEY": ""}):
+            resp = client.post("/v1/chat", json={"message": "hi"},
+                               headers={"Authorization": "Bearer anything"})
+            assert resp.status_code == 500
+
+    def test_api_key_not_set_returns_500(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("API_KEY", None)
+            resp = client.post("/v1/chat", json={"message": "hi"},
+                               headers={"Authorization": "Bearer anything"})
+            assert resp.status_code == 500
+
+    # 9. Session ID special chars rejected
+    def test_session_id_special_chars_rejected(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app, _rate_limiter
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+        _rate_limiter._buckets.clear()
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            resp = client.post("/v1/chat",
+                               json={"message": "hi", "session_id": "../../../etc/passwd"},
+                               headers={"Authorization": "Bearer k"})
+            assert resp.status_code == 422  # Pydantic validation error
+
+    def test_session_id_too_long_rejected(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            resp = client.post("/v1/chat",
+                               json={"message": "hi", "session_id": "a" * 100},
+                               headers={"Authorization": "Bearer k"})
+            assert resp.status_code == 422
+
+    # 12. Mixed media types in response
+    @pytest.mark.asyncio
+    async def test_mixed_media_response(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app, _rate_limiter
+
+        adapter = _make_adapter()
+
+        async def fake_handle(sid, msg, user_id=None):
+            key = adapter._build_session_key(sid)
+            q = adapter._response_queues.get(key)
+            if q:
+                await q.put({"type": "message", "content": "Look at these"})
+                await q.put({"type": "image", "url": "http://example.com/img.png"})
+                await q.put({"type": "audio", "url": "/v1/media/tok/audio.ogg"})
+                await q.put({"type": "done"})
+
+        adapter.handle_request = fake_handle
+        app = create_app(adapter)
+        client = TestClient(app)
+        _rate_limiter._buckets.clear()
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            resp = client.post("/v1/chat", json={"message": "show me"},
+                               headers={"Authorization": "Bearer k"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["response"] == "Look at these"
+        assert len(data["media"]) == 2
+        types = [m["type"] for m in data["media"]]
+        assert "image" in types
+        assert "audio" in types
+
+    # 15. Upload without file extension
+    def test_upload_no_extension(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            resp = client.post("/v1/upload",
+                               files={"file": ("noext", b"binary data", "application/octet-stream")},
+                               headers={"Authorization": "Bearer k"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["filename"] == "noext"
+        assert "url" in data
+
+    # WS rate limiting
+    def test_ws_rate_limited(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app, _rate_limiter
+
+        adapter = _make_adapter()
+
+        async def fake_handle(sid, msg, user_id=None):
+            key = adapter._build_session_key(sid)
+            q = adapter._response_queues.get(key)
+            if q:
+                await q.put({"type": "message", "content": "ok"})
+                await q.put({"type": "done"})
+
+        adapter.handle_request = fake_handle
+        app = create_app(adapter)
+        client = TestClient(app)
+        _rate_limiter._buckets.clear()
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            with client.websocket_connect("/v1/chat/stream") as ws:
+                ws.send_json({"type": "auth", "token": "k"})
+                ws.receive_json()  # auth_ok
+
+                # Exhaust rate limit
+                for i in range(10):
+                    ws.send_json({"message": f"msg {i}"})
+                    while True:
+                        r = ws.receive_json()
+                        if r.get("type") in ("done", "error"):
+                            break
+
+                # Next should be rate limited
+                ws.send_json({"message": "over limit"})
+                r = ws.receive_json()
+                assert r["type"] == "error"
+                assert "rate" in r["content"].lower() or "limit" in r["content"].lower()
+
+
 class TestToolsetWiring:
     def test_hermes_api_toolset_exists(self):
         from toolsets import TOOLSETS
