@@ -250,6 +250,8 @@ function handleResponse(data) {
     if (text) {
         addBotMessage(text);
         detectVoiceMode(text);
+        // Save bot message with media for history reload
+        saveHistory('bot', text, data.media);
     }
     if (data.media) {
         data.media.forEach(m => {
@@ -521,7 +523,7 @@ function addBotMessage(content) {
     const div = document.createElement('div'); div.className = 'msg bot';
     div.innerHTML = renderMarkdown(content);
     highlightCode(div);
-    messagesEl.insertBefore(div, typingEl); scrollToBottom(); saveHistory('bot', content);
+    messagesEl.insertBefore(div, typingEl); scrollToBottom();
 }
 
 function addUserImageMessage(url, filename) {
@@ -677,10 +679,10 @@ function getSupportedMime() {
 
 // ── History ────────────────────────────────────────────────────────
 
-function saveHistory(type, content) {
+function saveHistory(type, content, media) {
     const k = `hermes_history_${sessionId}`;
     const h = JSON.parse(localStorage.getItem(k) || '[]');
-    h.push({ type, content, time: Date.now() });
+    h.push({ type, content, media: media || null, time: Date.now() });
     if (h.length > 100) h.splice(0, h.length - 100);
     localStorage.setItem(k, JSON.stringify(h));
 }
@@ -689,7 +691,18 @@ function loadHistory() {
     const h = JSON.parse(localStorage.getItem(`hermes_history_${sessionId}`) || '[]');
     h.forEach(m => {
         if (m.type === 'user') addUserMessage(m.content);
-        else if (m.type === 'bot') addBotMessage(m.content);
+        else if (m.type === 'bot') {
+            addBotMessage(m.content);
+            if (m.media) {
+                m.media.forEach(med => {
+                    const url = med.url ? (med.url.startsWith('http') ? med.url : `${API_BASE}${med.url}`) : null;
+                    if (med.type === 'audio' && url) addVoiceMessage(url);
+                    else if (med.type === 'image' && url) addImageMessage(url, med.caption);
+                    else if (med.type === 'video' && url) addVideoMessage(url, med.caption);
+                    else if (med.type === 'document' && url) addDocumentMessage(url, med.filename || 'file', med.caption);
+                });
+            }
+        }
     });
 }
 </script>
