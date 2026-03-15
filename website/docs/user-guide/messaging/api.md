@@ -398,7 +398,7 @@ Each `session_id` maintains its own conversation context, just like separate cha
 | Policy | Default | Description |
 |--------|---------|-------------|
 | Daily | 4:00 AM | Reset at a specific hour each day |
-| Idle | 120 min | Reset after N minutes of inactivity |
+| Idle | 1440 min (24h) | Reset after N minutes of inactivity |
 
 You can override these in `~/.hermes/gateway.json`:
 
