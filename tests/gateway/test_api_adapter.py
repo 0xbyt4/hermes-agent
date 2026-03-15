@@ -1183,6 +1183,126 @@ class TestAdapterHostConfig:
         assert isinstance(adapter._media_files, dict)
 
 
+# ── Security fix tests ───────────────────────────────────────────────────
+
+
+class TestSecurityFixes:
+    def test_xss_sanitization_in_html(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+        html = client.get("/").text
+        assert "DOMPurify" in html
+        assert "dompurify" in html.lower()
+
+    def test_hmac_secret_not_api_key(self):
+        from gateway.api_server import _MEDIA_SECRET
+        api_key = os.getenv("API_KEY", "")
+        # Media secret should be independently generated, not derived from API_KEY
+        if api_key:
+            assert _MEDIA_SECRET != api_key
+
+    def test_hmac_secret_is_strong(self):
+        from gateway.api_server import _MEDIA_SECRET
+        assert len(_MEDIA_SECRET) >= 32  # At least 128 bits
+
+    def test_error_does_not_leak_internals(self):
+        adapter = _make_adapter()
+        queue = adapter.register_queue("s1")
+        session_key = adapter._build_session_key("s1")
+
+        async def failing_parent(event, sk):
+            raise RuntimeError("secret database password: abc123")
+
+        event = MessageEvent(
+            text="hi",
+            source=SessionSource(
+                platform=Platform.API, chat_id="s1", user_id="s1", chat_type="channel"
+            ),
+        )
+
+        import asyncio
+        with patch(
+            "gateway.platforms.base.BasePlatformAdapter._process_message_background",
+            side_effect=failing_parent,
+        ):
+            asyncio.get_event_loop().run_until_complete(
+                adapter._process_message_background(event, session_key)
+            )
+
+        messages = []
+        while not queue.empty():
+            messages.append(queue.get_nowait())
+        error_msgs = [m for m in messages if m["type"] == "error"]
+        assert len(error_msgs) == 1
+        assert "secret" not in error_msgs[0]["content"]
+        assert "abc123" not in error_msgs[0]["content"]
+        assert "internal error" in error_msgs[0]["content"].lower()
+
+    def test_cors_middleware_configured(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        # Check CORS middleware exists in the middleware stack
+        middleware_str = str(app.user_middleware)
+        assert "CORSMiddleware" in middleware_str
+
+    def test_ws_message_length_limit(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+
+        with patch.dict(os.environ, {"API_KEY": "ws-key"}):
+            with client.websocket_connect("/v1/chat/stream") as ws:
+                ws.send_json({"type": "auth", "token": "ws-key"})
+                ws.receive_json()  # auth_ok
+                ws.send_json({"message": "x" * 100_001})
+                resp = ws.receive_json()
+                assert resp["type"] == "error"
+                assert "too long" in resp["content"].lower()
+
+    def test_upload_streaming_read_rejects_large(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+
+        large_data = b"x" * (26 * 1024 * 1024)
+        with patch.dict(os.environ, {"API_KEY": "test-key"}):
+            resp = client.post(
+                "/v1/upload",
+                files={"file": ("big.bin", large_data, "application/octet-stream")},
+                headers={"Authorization": "Bearer test-key"},
+            )
+        assert resp.status_code == 413
+
+    def test_no_api_key_in_html_localstorage(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+        html = client.get("/").text
+        assert "hermes_api_key" not in html
+
+    def test_history_no_duplicate_on_load(self):
+        """loadHistory should not re-save messages."""
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+        html = client.get("/").text
+        # addUserMessage called from loadHistory should pass save=false
+        assert "addUserMessage(m.content, false)" in html
+
+
 class TestToolsetWiring:
     def test_hermes_api_toolset_exists(self):
         from toolsets import TOOLSETS

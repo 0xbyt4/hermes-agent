@@ -253,7 +253,7 @@ class APIPlatformAdapter(BasePlatformAdapter):
             logger.error("API message processing error: %s", e)
             queue = self._response_queues.get(session_key)
             if queue:
-                await queue.put({"type": "error", "content": str(e)})
+                await queue.put({"type": "error", "content": "An internal error occurred. Check server logs."})
         finally:
             queue = self._response_queues.get(session_key)
             if queue:

@@ -26,6 +26,7 @@ from uuid import uuid4
 import tempfile
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 RESPONSE_TIMEOUT = int(os.getenv("API_RESPONSE_TIMEOUT", "300"))
 
 # Media file token signing — prevents path traversal by signing the full path
-_MEDIA_SECRET = os.getenv("API_KEY", "") or secrets.token_hex(16)
+_MEDIA_SECRET = secrets.token_hex(32)  # Separate from API_KEY, regenerated per process
 
 
 def _sign_media_path(file_path: str) -> str:
@@ -73,6 +74,15 @@ class ChatResponse(BaseModel):
 def create_app(adapter: APIPlatformAdapter) -> FastAPI:
     """Build and return the FastAPI application wired to *adapter*."""
     app = FastAPI(title="Hermes Agent API", version="1.0.0")
+
+    # CORS — allow same-origin by default, configurable via env
+    cors_origins = os.getenv("API_CORS_ORIGINS", "").strip()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins.split(",") if cors_origins else [],
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
     # ── Web UI ────────────────────────────────────────────────────────
 
@@ -165,6 +175,9 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
                 if not message:
                     await ws.send_json({"type": "error", "content": "Empty message"})
                     continue
+                if len(message) > 100_000:
+                    await ws.send_json({"type": "error", "content": "Message too long (max 100K chars)"})
+                    continue
 
                 queue = adapter.register_queue(session_id)
                 try:
@@ -205,6 +218,21 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
         os.getenv("HERMES_HOME", Path.home() / ".hermes")
     ) / "api_uploads"
     _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+    _CHUNK_SIZE = 64 * 1024  # 64 KB read chunks
+
+    async def _read_upload_safe(self_file: UploadFile, max_bytes: int) -> bytes:
+        """Read upload in chunks, rejecting if over max_bytes."""
+        chunks = []
+        total = 0
+        while True:
+            chunk = await self_file.read(_CHUNK_SIZE)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(413, f"File too large (max {max_bytes // 1024 // 1024} MB)")
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     @app.post("/v1/upload")
     async def upload_file(
@@ -216,9 +244,7 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
         Accepted for any file type. Max 25 MB.
         Use the returned ``url`` in chat messages or for voice input.
         """
-        data = await file.read()
-        if len(data) > _MAX_UPLOAD_BYTES:
-            raise HTTPException(413, f"File too large (max {_MAX_UPLOAD_BYTES // 1024 // 1024} MB)")
+        data = await _read_upload_safe(file, _MAX_UPLOAD_BYTES)
 
         _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         suffix = Path(file.filename).suffix if file.filename else ""
@@ -247,9 +273,7 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
         The audio is transcribed via the configured STT provider, then the
         transcript is sent to the agent as a voice message.
         """
-        data = await file.read()
-        if len(data) > _MAX_UPLOAD_BYTES:
-            raise HTTPException(413, f"File too large (max {_MAX_UPLOAD_BYTES // 1024 // 1024} MB)")
+        data = await _read_upload_safe(file, _MAX_UPLOAD_BYTES)
 
         # Save to temp file for transcription
         suffix = Path(file.filename).suffix if file.filename else ".webm"

@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
 <style>
 :root {
     --bg: #08090d;
@@ -470,9 +471,10 @@ async function uploadFile(el) {
 
 // ── Messages ───────────────────────────────────────────────────────
 
-function addUserMessage(text) {
+function addUserMessage(text, save = true) {
     const div = document.createElement('div'); div.className = 'msg user'; div.textContent = text;
-    messagesEl.insertBefore(div, typingEl); scrollToBottom(); saveHistory('user', text);
+    messagesEl.insertBefore(div, typingEl); scrollToBottom();
+    if (save) saveHistory('user', text);
 }
 
 function addUserVoiceMessage(audioUrl) {
@@ -575,7 +577,12 @@ function addUserAudioMessage(url, filename) {
 function addUserFileMessage(filename, size) {
     const div = document.createElement('div'); div.className = 'msg user';
     const sizeStr = size < 1024 ? size+'B' : size < 1048576 ? (size/1024).toFixed(1)+'KB' : (size/1048576).toFixed(1)+'MB';
-    div.innerHTML = '<div style="display:flex;align-items:center;gap:8px"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg><div><div>'+filename+'</div><div style="font-size:11px;opacity:0.7">'+sizeStr+'</div></div></div>';
+    const wrapper = document.createElement('div'); wrapper.style.cssText = 'display:flex;align-items:center;gap:8px';
+    wrapper.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg>';
+    const info = document.createElement('div');
+    const nameEl = document.createElement('div'); nameEl.textContent = filename; info.appendChild(nameEl);
+    const sizeEl = document.createElement('div'); sizeEl.style.cssText = 'font-size:11px;opacity:0.7'; sizeEl.textContent = sizeStr; info.appendChild(sizeEl);
+    wrapper.appendChild(info); div.appendChild(wrapper);
     messagesEl.insertBefore(div, typingEl); scrollToBottom(); saveHistory('user', `[File: ${filename}]`);
 }
 
@@ -646,7 +653,8 @@ function addDocumentMessage(url, filename, caption) {
     const div = document.createElement('div'); div.className = 'msg bot';
     if (caption) div.innerHTML = renderMarkdown(caption);
     const a = document.createElement('a'); a.className = 'file-download'; a.href = url; a.download = filename;
-    a.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg>' + filename;
+    a.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg>';
+    const fnSpan = document.createElement('span'); fnSpan.textContent = filename; a.appendChild(fnSpan);
     div.appendChild(a);
     messagesEl.insertBefore(div, typingEl); scrollToBottom();
 }
@@ -656,7 +664,14 @@ function addSystemMessage(text) {
     messagesEl.insertBefore(div, typingEl); scrollToBottom();
 }
 
-function renderMarkdown(text) { try { return marked.parse(text); } catch(e) { return text.replace(/</g,'&lt;').replace(/>/g,'&gt;'); } }
+function renderMarkdown(text) {
+    try {
+        const html = marked.parse(text);
+        return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html) : html;
+    } catch(e) {
+        return text.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+}
 function highlightCode(el) { el.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b)); }
 
 // ── Typing ─────────────────────────────────────────────────────────
@@ -690,7 +705,7 @@ function saveHistory(type, content, media) {
 function loadHistory() {
     const h = JSON.parse(localStorage.getItem(`hermes_history_${sessionId}`) || '[]');
     h.forEach(m => {
-        if (m.type === 'user') addUserMessage(m.content);
+        if (m.type === 'user') addUserMessage(m.content, false);
         else if (m.type === 'bot') {
             addBotMessage(m.content);
             if (m.media) {
