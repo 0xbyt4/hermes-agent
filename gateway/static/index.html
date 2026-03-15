@@ -200,7 +200,6 @@ function doAuth() {
     fetch(`${API_BASE}/v1/sessions`, { headers: { 'Authorization': `Bearer ${apiKey}` } })
     .then(r => {
         if (r.ok) {
-            localStorage.setItem('hermes_api_key', apiKey);
             if (!sessionId) { sessionId = 'web-' + Math.random().toString(36).substr(2, 8); localStorage.setItem('hermes_session_id', sessionId); }
             document.getElementById('auth-screen').style.display = 'none';
             document.getElementById('chat-screen').style.display = 'flex';
@@ -321,7 +320,7 @@ function enterVoiceMode() {
     voiceMode = true;
     document.getElementById('voice-btn').classList.add('voice-mode');
     document.getElementById('input-bar').classList.add('voice-mode-active');
-    addSystemMessage('Voice mode active - speak and I will respond');
+    addSystemMessage('Listening... speak and I will respond');
     startRecording();
 }
 
@@ -331,7 +330,7 @@ function exitVoiceMode() {
     document.getElementById('input-bar').classList.remove('voice-mode-active');
     if (currentTtsAudio) { currentTtsAudio.pause(); currentTtsAudio = null; }
     stopRecording();
-    addSystemMessage('Voice mode off');
+    addSystemMessage('Stopped listening');
 }
 
 async function startRecording() {
@@ -403,7 +402,9 @@ function stopRecording() {
 }
 
 async function sendVoice(blob) {
-    addUserMessage('[Voice message]');
+    // Show playable voice bubble for user's recording
+    const blobUrl = URL.createObjectURL(blob);
+    addUserVoiceMessage(blobUrl);
     showTyping();
     try {
         const ext = blob.type.includes('webm') ? '.webm' : '.ogg';
@@ -444,6 +445,50 @@ async function uploadFile(el) {
 function addUserMessage(text) {
     const div = document.createElement('div'); div.className = 'msg user'; div.textContent = text;
     messagesEl.insertBefore(div, typingEl); scrollToBottom(); saveHistory('user', text);
+}
+
+function addUserVoiceMessage(audioUrl) {
+    const div = document.createElement('div'); div.className = 'msg user';
+    const audio = new Audio(audioUrl); audio.preload = 'metadata';
+
+    const bubble = document.createElement('div'); bubble.className = 'voice-bubble';
+    const btn = document.createElement('button'); btn.className = 'voice-play-btn';
+    const playSvg = '<svg viewBox="0 0 24 24"><polygon points="6,3 20,12 6,21"/></svg>';
+    const pauseSvg = '<svg viewBox="0 0 24 24"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg>';
+    btn.innerHTML = playSvg; bubble.appendChild(btn);
+
+    const waveform = document.createElement('div'); waveform.className = 'voice-waveform';
+    const bars = []; const barCount = 25;
+    for (let i = 0; i < barCount; i++) {
+        const bar = document.createElement('div'); bar.className = 'bar';
+        bar.style.height = (6 + Math.random() * 18) + 'px';
+        bar.style.background = '#fff'; bar.style.opacity = '0.4';
+        waveform.appendChild(bar); bars.push(bar);
+    }
+    bubble.appendChild(waveform);
+
+    const timeEl = document.createElement('div'); timeEl.className = 'voice-time'; timeEl.style.color = 'rgba(255,255,255,0.7)'; timeEl.textContent = '0:00';
+    bubble.appendChild(timeEl);
+
+    const fmt = s => { const m = Math.floor(s/60); const sec = Math.floor(s%60); return m+':'+(sec<10?'0':'')+sec; };
+    audio.addEventListener('loadedmetadata', () => { if (isFinite(audio.duration)) timeEl.textContent = fmt(audio.duration); });
+
+    let playing = false;
+    function updateProgress() {
+        if (!isFinite(audio.duration)) return;
+        const pct = audio.currentTime / audio.duration;
+        bars.forEach((b, i) => { b.style.opacity = i <= Math.floor(pct * barCount) ? '1' : '0.4'; });
+        timeEl.textContent = fmt(audio.currentTime);
+        if (playing) requestAnimationFrame(updateProgress);
+    }
+    btn.onclick = () => { if (playing) audio.pause(); else audio.play(); };
+    audio.onplay = () => { playing = true; btn.innerHTML = pauseSvg; updateProgress(); };
+    audio.onpause = () => { playing = false; btn.innerHTML = playSvg; };
+    audio.onended = () => { playing = false; btn.innerHTML = playSvg; bars.forEach(b => b.style.opacity = '0.4'); if (isFinite(audio.duration)) timeEl.textContent = fmt(audio.duration); };
+    waveform.onclick = (e) => { if (!isFinite(audio.duration)) return; const r = waveform.getBoundingClientRect(); audio.currentTime = ((e.clientX-r.left)/r.width)*audio.duration; if (!playing) audio.play(); };
+
+    div.appendChild(bubble);
+    messagesEl.insertBefore(div, typingEl); scrollToBottom(); saveHistory('user', '[Voice message]');
 }
 
 function addBotMessage(content) {
