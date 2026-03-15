@@ -989,6 +989,200 @@ class TestWebUI:
         assert "exitVoiceMode" in resp.text
 
 
+# ── Media registration and HMAC tests ────────────────────────────────────
+
+
+class TestMediaRegistration:
+    def test_register_media_returns_url_with_token(self, tmp_path):
+        adapter = _make_adapter()
+        f = tmp_path / "test.ogg"
+        f.write_bytes(b"data")
+        url = adapter._register_media(str(f))
+        assert "/v1/media/" in url
+        assert "test.ogg" in url
+        # URL has token between /media/ and /filename
+        parts = url.split("/")
+        token = parts[-2]
+        assert len(token) == 16  # HMAC truncated to 16 hex chars
+
+    def test_register_media_copies_to_api_media_dir(self, tmp_path):
+        adapter = _make_adapter()
+        f = tmp_path / "ephemeral.mp3"
+        f.write_bytes(b"audio-content")
+        adapter._register_media(str(f))
+        # File should exist in api_media dir
+        import glob
+        copies = glob.glob(os.path.join(adapter._MEDIA_DIR, "ephemeral.mp3"))
+        assert len(copies) == 1
+
+    def test_register_media_different_files_get_different_tokens(self, tmp_path):
+        adapter = _make_adapter()
+        f1 = tmp_path / "a.ogg"
+        f2 = tmp_path / "b.ogg"
+        f1.write_bytes(b"aaa")
+        f2.write_bytes(b"bbb")
+        url1 = adapter._register_media(str(f1))
+        url2 = adapter._register_media(str(f2))
+        assert url1 != url2
+
+    def test_media_files_dict_tracks_registrations(self, tmp_path):
+        adapter = _make_adapter()
+        f = tmp_path / "track.wav"
+        f.write_bytes(b"wav")
+        adapter._register_media(str(f))
+        assert len(adapter._media_files) == 1
+        # Value is the api_media copy path
+        path = list(adapter._media_files.values())[0]
+        assert os.path.isfile(path)
+
+
+class TestGuessMediaType:
+    def test_common_types(self):
+        from gateway.api_server import _guess_media_type
+        assert _guess_media_type("test.ogg") == "audio/ogg"
+        assert _guess_media_type("test.mp3") == "audio/mpeg"
+        assert _guess_media_type("test.mp4") == "video/mp4"
+        assert _guess_media_type("test.jpg") == "image/jpeg"
+        assert _guess_media_type("test.png") == "image/png"
+        assert _guess_media_type("test.pdf") == "application/pdf"
+        assert _guess_media_type("test.gif") == "image/gif"
+
+    def test_unknown_extension(self):
+        from gateway.api_server import _guess_media_type
+        assert _guess_media_type("test.xyz") == "application/octet-stream"
+
+    def test_case_insensitive(self):
+        from gateway.api_server import _guess_media_type
+        assert _guess_media_type("TEST.MP3") == "audio/mpeg"
+        assert _guess_media_type("photo.JPG") == "image/jpeg"
+
+
+class TestMediaSignature:
+    def test_sign_produces_consistent_result(self):
+        from gateway.api_server import _sign_media_path
+        sig1 = _sign_media_path("/tmp/test.ogg")
+        sig2 = _sign_media_path("/tmp/test.ogg")
+        assert sig1 == sig2
+
+    def test_different_paths_different_signatures(self):
+        from gateway.api_server import _sign_media_path
+        sig1 = _sign_media_path("/tmp/a.ogg")
+        sig2 = _sign_media_path("/tmp/b.ogg")
+        assert sig1 != sig2
+
+    def test_make_media_url_format(self):
+        from gateway.api_server import _make_media_url, _sign_media_path
+        url = _make_media_url("/tmp/hello.mp3")
+        token = _sign_media_path("/tmp/hello.mp3")
+        assert url == f"/v1/media/{token}/hello.mp3"
+
+
+# ── Route existence tests ────────────────────────────────────────────────
+
+
+class TestRouteExistence:
+    def _get_routes(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        return [r.path for r in app.routes]
+
+    def test_upload_route_exists(self):
+        assert "/v1/upload" in self._get_routes()
+
+    def test_voice_chat_route_exists(self):
+        assert "/v1/chat/voice" in self._get_routes()
+
+    def test_media_route_exists(self):
+        routes = self._get_routes()
+        assert any("/v1/media" in r for r in routes)
+
+    def test_root_route_exists(self):
+        assert "/" in self._get_routes()
+
+
+# ── Web UI content tests ─────────────────────────────────────────────────
+
+
+class TestWebUIContent:
+    def _get_html(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+        return client.get("/").text
+
+    def test_glassmorphism_theme(self):
+        html = self._get_html()
+        assert "--glass" in html
+        assert "--accent" in html
+        assert "backdrop-filter" in html
+        assert "#6c5ce7" in html  # purple accent
+
+    def test_echo_prevention(self):
+        html = self._get_html()
+        assert "currentTtsAudio" in html
+        assert "echoCancellation" in html
+        assert "noiseSuppression" in html
+
+    def test_waveform_player(self):
+        html = self._get_html()
+        assert "voice-bubble" in html
+        assert "voice-waveform" in html
+        assert "voice-play-btn" in html
+
+    def test_file_type_detection(self):
+        html = self._get_html()
+        assert "image/" in html
+        assert "video/" in html
+        assert "audio/" in html
+        assert "heic" in html
+        assert "docx" in html
+
+    def test_markdown_support(self):
+        html = self._get_html()
+        assert "marked.parse" in html
+        assert "highlight.js" in html
+
+    def test_history_persistence(self):
+        html = self._get_html()
+        assert "saveHistory" in html
+        assert "loadHistory" in html
+        assert "localStorage" in html
+
+    def test_no_api_key_in_localstorage(self):
+        """API key should NOT be saved to localStorage."""
+        html = self._get_html()
+        assert "hermes_api_key" not in html
+
+    def test_clean_response_filters(self):
+        html = self._get_html()
+        assert "cleanResponse" in html
+        assert "No home channel" in html
+        assert "Rate limited" in html
+
+
+# ── Adapter host config tests ────────────────────────────────────────────
+
+
+class TestAdapterHostConfig:
+    def test_default_host_localhost(self):
+        adapter = _make_adapter()
+        assert adapter._host == "127.0.0.1"
+
+    def test_custom_host(self):
+        with patch.dict(os.environ, {"API_HOST": "0.0.0.0"}):
+            adapter = _make_adapter()
+            assert adapter._host == "0.0.0.0"
+
+    def test_has_media_files_dict(self):
+        adapter = _make_adapter()
+        assert hasattr(adapter, "_media_files")
+        assert isinstance(adapter._media_files, dict)
+
+
 class TestToolsetWiring:
     def test_hermes_api_toolset_exists(self):
         from toolsets import TOOLSETS
