@@ -32,8 +32,12 @@ API_ENABLED=true
 API_KEY=your-secret-api-key          # Used for authenticating requests
 
 # Optional
+API_HOST=0.0.0.0                      # Bind address (default: 127.0.0.1, use 0.0.0.0 for phone/tablet access)
 API_PORT=8766                         # Default: 8765
 API_RESPONSE_TIMEOUT=300              # Seconds before a request times out (default: 300)
+API_CORS_ORIGINS=                     # Comma-separated allowed origins (empty = same-origin only)
+API_SSL_CERT=/path/to/cert.pem        # Enable HTTPS (optional)
+API_SSL_KEY=/path/to/key.pem          # SSL private key (required with API_SSL_CERT)
 ```
 
 :::warning
@@ -51,8 +55,18 @@ hermes gateway
 The API server starts alongside any other configured platforms (Telegram, Discord, etc.). You'll see:
 
 ```text
-INFO  API server starting on port 8766
+[Api] API + Web UI: http://192.168.1.100:8766
+[Api]       also: http://10.8.0.2:8766
 ```
+
+Open the URL in your browser to access the built-in **Web UI** — a full-featured chat interface with voice mode, file uploads, and media playback.
+
+:::tip PWA Install
+The Web UI is installable as a Progressive Web App:
+- **iOS**: Safari → Share → "Add to Home Screen"
+- **Android**: Chrome shows an install prompt automatically
+- **Desktop**: Chrome shows an install icon in the address bar
+:::
 
 ---
 
@@ -173,15 +187,74 @@ If the agent generates images, audio, or documents, you'll receive media message
 
 ```json
 {"type": "image", "url": "https://...", "caption": "Generated diagram"}
-{"type": "audio", "path": "/tmp/response.mp3", "caption": null}
-{"type": "video", "path": "/tmp/clip.mp4", "caption": "Screen recording"}
-{"type": "document", "path": "/tmp/report.pdf", "caption": "Analysis report"}
+{"type": "audio", "url": "/v1/media/abc123.../response.ogg", "caption": null}
+{"type": "video", "url": "/v1/media/def456.../clip.mp4", "caption": "Screen recording"}
+{"type": "document", "url": "/v1/media/ghi789.../report.pdf", "caption": "Analysis report"}
 ```
+
+Media URLs are served via the `/v1/media/` endpoint. Download them with a simple GET request (no auth header needed — the HMAC token in the URL provides authentication).
 
 **Error messages:**
 
 ```json
 {"type": "error", "content": "Response timeout"}
+```
+
+### Voice Chat
+
+```
+POST /v1/chat/voice
+```
+
+Upload a voice recording, transcribe it via the configured STT provider, and send the transcript to the agent. Returns the same `ChatResponse` as `/v1/chat`.
+
+```bash
+curl -X POST http://localhost:8766/v1/chat/voice \
+  -H "Authorization: Bearer your-secret-api-key" \
+  -F "file=@recording.webm" \
+  -F "session_id=my-session"
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `file` | file | Yes | Audio file (webm, ogg, mp3, wav) |
+| `session_id` | string | No | Session ID for conversation continuity |
+
+### File Upload
+
+```
+POST /v1/upload
+```
+
+Upload any file (max 25 MB) and receive a download URL.
+
+```bash
+curl -X POST http://localhost:8766/v1/upload \
+  -H "Authorization: Bearer your-secret-api-key" \
+  -F "file=@document.pdf"
+```
+
+**Response:**
+
+```json
+{
+  "url": "/v1/media/abc123.../document.pdf",
+  "filename": "document.pdf",
+  "size": 102400,
+  "content_type": "application/pdf"
+}
+```
+
+### Media Download
+
+```
+GET /v1/media/{token}/{filename}
+```
+
+Download a media file produced by the agent (TTS audio, generated images, etc.). The URL is provided in the `media` array of chat responses. No API key header needed — the HMAC token in the URL authenticates the request.
+
+```bash
+curl http://localhost:8766/v1/media/abc123.../response.ogg -o response.ogg
 ```
 
 ### Interrupt
@@ -361,6 +434,34 @@ The API adapter bypasses the per-user allowlist system used by messaging platfor
 **Protect your API key.** It grants the same level of access as being an allowed user on Telegram or Discord — including tool use, terminal commands, and file access. Do not expose the API server to the public internet without additional security measures (reverse proxy, TLS, IP allowlist).
 :::
 
+### Rate Limiting
+
+The API enforces per-client rate limits to prevent abuse:
+
+| Endpoint | Limit |
+|----------|-------|
+| `/v1/chat` | 10 requests / minute |
+| `/v1/chat/voice` | 10 requests / minute |
+| `/v1/chat/stream` (WS) | 10 messages / minute |
+| `/v1/upload` | 20 requests / minute |
+
+Exceeding the limit returns HTTP `429 Too Many Requests` or a WebSocket error message. Limits refill gradually over time (token bucket algorithm).
+
+### TLS / HTTPS
+
+For microphone access on phones (required by browsers) and encrypted communication, enable TLS:
+
+```bash
+# Generate a self-signed certificate (for local network)
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=hermes"
+
+# Add to .env
+API_SSL_CERT=/path/to/cert.pem
+API_SSL_KEY=/path/to/key.pem
+```
+
+The server will show `https://` URLs on startup. Self-signed certs trigger a browser warning — click "Advanced" → "Proceed" on first visit.
+
 ### Production Deployment
 
 For production use, place the API behind a reverse proxy with TLS:
@@ -400,6 +501,10 @@ For more information on securing your Hermes Agent deployment, see the [Security
 | **Response timeout** | The agent took too long. Increase `API_RESPONSE_TIMEOUT` or simplify the request. |
 | **Port already in use** | Another service is using the port. Change `API_PORT` to a different value. |
 | **FastAPI not installed** | Run `pip install -e ".[api]"` or `pip install -e ".[all]"` to install API dependencies. |
+| **Can't access from phone** | Set `API_HOST=0.0.0.0` in `.env` and restart. Use the IP shown in startup logs. |
+| **Microphone not working on phone** | Browsers require HTTPS for microphone. Set `API_SSL_CERT`/`API_SSL_KEY` or use localhost. |
+| **Rate limited (429)** | Too many requests. Wait a few seconds and retry. Limits: 10 chat/min, 20 upload/min. |
+| **Voice transcription failed (422)** | Audio could not be transcribed. Check STT provider config and server logs. |
 
 ---
 
@@ -409,5 +514,9 @@ For more information on securing your Hermes Agent deployment, see the [Security
 |----------|----------|---------|-------------|
 | `API_ENABLED` | Yes | `false` | Enable the REST/WebSocket API adapter |
 | `API_KEY` | Yes | — | Secret key for authenticating API requests |
+| `API_HOST` | No | `127.0.0.1` | Bind address (`0.0.0.0` for external access) |
 | `API_PORT` | No | `8765` | Port the API server listens on |
 | `API_RESPONSE_TIMEOUT` | No | `300` | Seconds before a request times out |
+| `API_SSL_CERT` | No | — | Path to SSL certificate for HTTPS |
+| `API_SSL_KEY` | No | — | Path to SSL private key |
+| `API_CORS_ORIGINS` | No | — | Comma-separated allowed CORS origins |
