@@ -641,7 +641,7 @@ function highlightCode(el) { el.querySelectorAll('pre code').forEach(b => hljs.h
 
 // ── Typing ─────────────────────────────────────────────────────────
 
-let typingTimeout = null;
+var typingTimeout = null;
 function showTyping() { typingEl.style.display = 'block'; scrollToBottom(); clearTimeout(typingTimeout); typingTimeout = setTimeout(hideTyping, 30000); }
 function hideTyping() { typingEl.style.display = 'none'; clearTimeout(typingTimeout); }
 
