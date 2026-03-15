@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
@@ -71,6 +71,17 @@ class ChatResponse(BaseModel):
 def create_app(adapter: APIPlatformAdapter) -> FastAPI:
     """Build and return the FastAPI application wired to *adapter*."""
     app = FastAPI(title="Hermes Agent API", version="1.0.0")
+
+    # ── Web UI ────────────────────────────────────────────────────────
+
+    _static_dir = Path(__file__).parent / "static"
+
+    @app.get("/", response_class=HTMLResponse)
+    async def web_ui():
+        index = _static_dir / "index.html"
+        if index.is_file():
+            return HTMLResponse(index.read_text())
+        return HTMLResponse("<h1>Hermes Agent API</h1><p>Web UI not found.</p>")
 
     # ── Auth dependency ──────────────────────────────────────────────
 

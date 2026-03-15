@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hermes Agent API</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header */
+  .header { padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d; display: flex; align-items: center; gap: 12px; }
+  .header h1 { font-size: 16px; color: #f0e6d3; }
+  .header .status { font-size: 12px; color: #3fb950; }
+  .header .status.error { color: #f85149; }
+
+  /* Auth */
+  .auth-bar { padding: 8px 20px; background: #1c2128; border-bottom: 1px solid #30363d; display: flex; gap: 8px; align-items: center; }
+  .auth-bar input { flex: 1; max-width: 300px; padding: 6px 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; font-size: 13px; }
+  .auth-bar button { padding: 6px 14px; background: #238636; border: none; border-radius: 6px; color: #fff; cursor: pointer; font-size: 13px; }
+  .auth-bar button:hover { background: #2ea043; }
+  .auth-bar .session-id { font-size: 12px; color: #8b949e; margin-left: 8px; }
+
+  /* Messages */
+  .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; font-size: 14px; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: #1f6feb; color: #fff; border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: #21262d; border: 1px solid #30363d; border-bottom-left-radius: 4px; }
+  .msg.system { align-self: center; background: transparent; color: #8b949e; font-size: 12px; font-style: italic; }
+  .msg.error { align-self: center; background: #3d1214; border: 1px solid #f85149; color: #f85149; font-size: 13px; }
+  .msg pre { background: #161b22; padding: 8px; border-radius: 6px; overflow-x: auto; margin: 6px 0; font-size: 13px; }
+  .msg code { font-family: 'SF Mono', Monaco, monospace; font-size: 13px; }
+
+  /* Audio player */
+  .msg audio { margin-top: 8px; width: 100%; max-width: 300px; height: 36px; }
+  .msg .media-label { font-size: 11px; color: #8b949e; margin-top: 4px; }
+
+  /* Input */
+  .input-area { padding: 12px 20px; background: #161b22; border-top: 1px solid #30363d; display: flex; gap: 8px; }
+  .input-area input { flex: 1; padding: 10px 14px; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; color: #c9d1d9; font-size: 14px; outline: none; }
+  .input-area input:focus { border-color: #1f6feb; }
+  .input-area input:disabled { opacity: 0.5; }
+  .input-area button { padding: 10px 20px; background: #1f6feb; border: none; border-radius: 8px; color: #fff; cursor: pointer; font-size: 14px; font-weight: 500; }
+  .input-area button:hover { background: #388bfd; }
+  .input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Loading */
+  .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
+  .typing span { width: 6px; height: 6px; background: #8b949e; border-radius: 50%; animation: bounce 1.4s infinite; }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-8px); } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Hermes Agent</h1>
+  <span class="status" id="status">checking...</span>
+</div>
+
+<div class="auth-bar">
+  <input type="password" id="apiKey" placeholder="API Key" />
+  <button onclick="connect()">Connect</button>
+  <span class="session-id" id="sessionInfo"></span>
+</div>
+
+<div class="messages" id="messages"></div>
+
+<div class="input-area">
+  <input type="text" id="input" placeholder="Type a message..." disabled onkeydown="if(event.key==='Enter')sendMessage()" />
+  <button id="sendBtn" onclick="sendMessage()" disabled>Send</button>
+</div>
+
+<script>
+const API_BASE = window.location.origin;
+let apiKey = '';
+let sessionId = '';
+let connected = false;
+
+// Check health on load
+fetch(`${API_BASE}/v1/health`)
+  .then(r => r.json())
+  .then(d => {
+    document.getElementById('status').textContent = 'online';
+    document.getElementById('status').className = 'status';
+  })
+  .catch(() => {
+    document.getElementById('status').textContent = 'offline';
+    document.getElementById('status').className = 'status error';
+  });
+
+// Try loading saved key
+const savedKey = localStorage.getItem('hermes_api_key');
+const savedSession = localStorage.getItem('hermes_session_id');
+if (savedKey) {
+  document.getElementById('apiKey').value = savedKey;
+  if (savedSession) sessionId = savedSession;
+  connect();
+}
+
+function connect() {
+  apiKey = document.getElementById('apiKey').value.trim();
+  if (!apiKey) return;
+
+  localStorage.setItem('hermes_api_key', apiKey);
+
+  if (!sessionId) {
+    sessionId = 'web-' + Math.random().toString(36).substr(2, 8);
+    localStorage.setItem('hermes_session_id', sessionId);
+  }
+
+  // Test auth
+  fetch(`${API_BASE}/v1/sessions`, {
+    headers: { 'Authorization': `Bearer ${apiKey}` }
+  }).then(r => {
+    if (r.ok) {
+      connected = true;
+      document.getElementById('input').disabled = false;
+      document.getElementById('sendBtn').disabled = false;
+      document.getElementById('sessionInfo').textContent = `Session: ${sessionId}`;
+      document.getElementById('status').textContent = 'connected';
+      addMessage('system', 'Connected to Hermes Agent API');
+
+      // Load chat history from localStorage
+      loadHistory();
+    } else {
+      addMessage('error', 'Invalid API key');
+    }
+  }).catch(e => addMessage('error', 'Connection failed: ' + e.message));
+}
+
+function addMessage(type, content, media) {
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = `msg ${type}`;
+
+  // Format content
+  let html = escapeHtml(content)
+    .replace(/\n/g, '<br>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  div.innerHTML = html;
+
+  // Add media (audio, images, etc.)
+  if (media && media.length > 0) {
+    media.forEach(m => {
+      if (m.type === 'audio' && m.url) {
+        const audioUrl = m.url.startsWith('http') ? m.url : `${API_BASE}${m.url}`;
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.src = audioUrl;
+        audio.preload = 'auto';
+        div.appendChild(audio);
+
+        const label = document.createElement('div');
+        label.className = 'media-label';
+        label.textContent = 'Voice response';
+        div.appendChild(label);
+
+        // Auto-play
+        audio.play().catch(() => {});
+      } else if (m.type === 'image' && (m.url || m.path)) {
+        const img = document.createElement('img');
+        const imgUrl = (m.url || m.path);
+        img.src = imgUrl.startsWith('http') ? imgUrl : `${API_BASE}${imgUrl}`;
+        img.style.maxWidth = '100%';
+        img.style.borderRadius = '8px';
+        img.style.marginTop = '8px';
+        div.appendChild(img);
+      }
+    });
+  }
+
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+
+  // Save to history (skip system messages)
+  if (type !== 'system' && type !== 'error') {
+    saveToHistory(type, content, media);
+  }
+
+  return div;
+}
+
+function showTyping() {
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.id = 'typing';
+  div.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function removeTyping() {
+  const el = document.getElementById('typing');
+  if (el) el.remove();
+}
+
+async function sendMessage() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text || !connected) return;
+
+  input.value = '';
+  addMessage('user', text);
+  showTyping();
+
+  // Disable input while processing
+  input.disabled = true;
+  document.getElementById('sendBtn').disabled = true;
+
+  try {
+    const resp = await fetch(`${API_BASE}/v1/chat`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ message: text, session_id: sessionId }),
+    });
+
+    removeTyping();
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+      addMessage('error', `Error ${resp.status}: ${err.detail || JSON.stringify(err)}`);
+      return;
+    }
+
+    const data = await resp.json();
+
+    // Filter out noise from response
+    let response = data.response || '';
+    // Remove home channel prompt if present
+    if (response.includes('No home channel is set')) {
+      const lines = response.split('\n');
+      const idx = lines.findIndex(l => l.includes('/sethome'));
+      if (idx >= 0) {
+        response = lines.slice(idx + 1).join('\n').trim();
+      }
+    }
+
+    if (response) {
+      addMessage('bot', response, data.media);
+    }
+  } catch (e) {
+    removeTyping();
+    addMessage('error', 'Request failed: ' + e.message);
+  } finally {
+    input.disabled = false;
+    document.getElementById('sendBtn').disabled = false;
+    input.focus();
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Chat history (localStorage)
+function saveToHistory(type, content, media) {
+  const key = `hermes_history_${sessionId}`;
+  const history = JSON.parse(localStorage.getItem(key) || '[]');
+  history.push({ type, content, media, time: Date.now() });
+  // Keep last 100 messages
+  if (history.length > 100) history.splice(0, history.length - 100);
+  localStorage.setItem(key, JSON.stringify(history));
+}
+
+function loadHistory() {
+  const key = `hermes_history_${sessionId}`;
+  const history = JSON.parse(localStorage.getItem(key) || '[]');
+  history.forEach(h => addMessage(h.type, h.content, h.media));
+}
+</script>
+</body>
+</html>

@@ -103,13 +103,30 @@ class APIPlatformAdapter(BasePlatformAdapter):
         session_key = self._build_session_key(chat_id)
         self._response_queues.pop(session_key, None)
 
+    _MEDIA_DIR = os.path.join(
+        os.getenv("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes")),
+        "api_media",
+    )
+
     def _register_media(self, file_path: str) -> str:
-        """Register a media file and return its download URL."""
+        """Copy media file to a persistent directory and return its download URL.
+
+        The original file may be deleted by the caller (e.g. auto-TTS cleanup),
+        so we keep our own copy in ~/.hermes/api_media/.
+        """
+        import shutil
         from gateway.api_server import _sign_media_path, _make_media_url
-        token = _sign_media_path(file_path)
+
+        os.makedirs(self._MEDIA_DIR, exist_ok=True)
         filename = os.path.basename(file_path)
-        self._media_files[f"{token}/{filename}"] = file_path
-        return _make_media_url(file_path)
+        dest = os.path.join(self._MEDIA_DIR, filename)
+
+        if os.path.isfile(file_path) and os.path.abspath(file_path) != os.path.abspath(dest):
+            shutil.copy2(file_path, dest)
+
+        token = _sign_media_path(dest)
+        self._media_files[f"{token}/{filename}"] = dest
+        return _make_media_url(dest)
 
     # ── Send methods (route to response queue) ───────────────────────────
 

@@ -728,23 +728,26 @@ class TestMediaDownload:
         resp = client.get("/v1/media/badtoken/fake.ogg")
         assert resp.status_code == 404
 
-    def test_media_file_deleted_returns_410(self, tmp_path):
+    def test_media_survives_original_deletion(self, tmp_path):
+        """Media copy persists even after the original file is deleted."""
         from fastapi.testclient import TestClient
         from gateway.api_server import create_app
 
         adapter = _make_adapter()
         app = create_app(adapter)
 
-        audio_file = tmp_path / "gone.ogg"
+        audio_file = tmp_path / "ephemeral.ogg"
         audio_file.write_bytes(b"\x00" * 10)
         url = adapter._register_media(str(audio_file))
 
-        # Delete the file
+        # Delete the ORIGINAL (simulates auto-TTS cleanup)
         audio_file.unlink()
 
+        # Download still works from the api_media copy
         client = TestClient(app)
         resp = client.get(url)
-        assert resp.status_code == 410
+        assert resp.status_code == 200
+        assert len(resp.content) == 10
 
     @pytest.mark.asyncio
     async def test_voice_response_has_downloadable_url(self, tmp_path):
