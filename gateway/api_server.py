@@ -7,19 +7,24 @@ Provides:
   - POST /v1/chat/interrupt — interrupt a running agent
   - GET  /v1/sessions       — list active sessions
   - GET  /v1/sessions/{id}  — get session transcript
+  - GET  /v1/media/{token}/{filename} — download media files (audio, images, etc.)
   - GET  /v1/health         — health check
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import os
 import secrets
+from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
@@ -28,6 +33,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 RESPONSE_TIMEOUT = int(os.getenv("API_RESPONSE_TIMEOUT", "300"))
+
+# Media file token signing — prevents path traversal by signing the full path
+_MEDIA_SECRET = os.getenv("API_KEY", "") or secrets.token_hex(16)
+
+
+def _sign_media_path(file_path: str) -> str:
+    """Create an HMAC token for a media file path."""
+    return hmac.new(_MEDIA_SECRET.encode(), file_path.encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def _make_media_url(file_path: str, host: str = "") -> str:
+    """Build a /v1/media/{token}/{filename} URL for a local file."""
+    token = _sign_media_path(file_path)
+    filename = Path(file_path).name
+    base = host.rstrip("/") if host else ""
+    return f"{base}/v1/media/{token}/{filename}"
 
 
 # ── Request / Response models ────────────────────────────────────────────
@@ -184,4 +205,51 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
             return {"session_id": session_id, "messages": transcript or []}
         return {"session_id": session_id, "messages": [], "note": "session store not available"}
 
+    # ── Media download ────────────────────────────────────────────────
+
+    @app.get("/v1/media/{token}/{filename}")
+    async def download_media(token: str, filename: str):
+        """Serve a media file if the token is valid.
+
+        The token is an HMAC of the full file path, preventing path traversal.
+        No API key header needed — the token itself authenticates the request.
+        """
+        # Look up the file in the adapter's media registry
+        file_path = adapter._media_files.get(f"{token}/{filename}")
+        if not file_path:
+            raise HTTPException(404, "Media not found or expired")
+
+        path = Path(file_path)
+        if not path.is_file():
+            raise HTTPException(410, "Media file no longer available")
+
+        # Verify token matches the registered path
+        expected_token = _sign_media_path(file_path)
+        if not secrets.compare_digest(token, expected_token):
+            raise HTTPException(403, "Invalid media token")
+
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type=_guess_media_type(filename),
+        )
+
     return app
+
+
+def _guess_media_type(filename: str) -> str:
+    """Return a MIME type based on file extension."""
+    ext = Path(filename).suffix.lower()
+    return {
+        ".ogg": "audio/ogg",
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".opus": "audio/opus",
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".pdf": "application/pdf",
+    }.get(ext, "application/octet-stream")

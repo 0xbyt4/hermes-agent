@@ -45,6 +45,7 @@ class APIPlatformAdapter(BasePlatformAdapter):
         self._host = os.getenv("API_HOST", "127.0.0.1")
         self._port = int(os.getenv("API_PORT", "8765"))
         self._response_queues: Dict[str, asyncio.Queue] = {}
+        self._media_files: Dict[str, str] = {}  # token/filename -> file_path
 
     async def connect(self) -> bool:
         """Start the FastAPI/uvicorn server in background."""
@@ -102,6 +103,14 @@ class APIPlatformAdapter(BasePlatformAdapter):
         session_key = self._build_session_key(chat_id)
         self._response_queues.pop(session_key, None)
 
+    def _register_media(self, file_path: str) -> str:
+        """Register a media file and return its download URL."""
+        from gateway.api_server import _sign_media_path, _make_media_url
+        token = _sign_media_path(file_path)
+        filename = os.path.basename(file_path)
+        self._media_files[f"{token}/{filename}"] = file_path
+        return _make_media_url(file_path)
+
     # ── Send methods (route to response queue) ───────────────────────────
 
     async def send(
@@ -143,12 +152,13 @@ class APIPlatformAdapter(BasePlatformAdapter):
         reply_to: Optional[str] = None,
         **kwargs,
     ) -> SendResult:
-        """Push audio file path to response queue."""
+        """Push audio with download URL to response queue."""
         queue = self._get_queue(chat_id)
         if queue:
+            url = self._register_media(audio_path)
             await queue.put({
                 "type": "audio",
-                "path": audio_path,
+                "url": url,
                 "caption": caption,
             })
         return SendResult(success=True, message_id=str(uuid4()))
@@ -161,12 +171,13 @@ class APIPlatformAdapter(BasePlatformAdapter):
         reply_to: Optional[str] = None,
         **kwargs,
     ) -> SendResult:
-        """Push video file path to response queue."""
+        """Push video with download URL to response queue."""
         queue = self._get_queue(chat_id)
         if queue:
+            url = self._register_media(video_path)
             await queue.put({
                 "type": "video",
-                "path": video_path,
+                "url": url,
                 "caption": caption,
             })
         return SendResult(success=True, message_id=str(uuid4()))
@@ -179,12 +190,13 @@ class APIPlatformAdapter(BasePlatformAdapter):
         reply_to: Optional[str] = None,
         **kwargs,
     ) -> SendResult:
-        """Push image file path to response queue."""
+        """Push image file with download URL to response queue."""
         queue = self._get_queue(chat_id)
         if queue:
+            url = self._register_media(image_path)
             await queue.put({
                 "type": "image",
-                "path": image_path,
+                "url": url,
                 "caption": caption,
             })
         return SendResult(success=True, message_id=str(uuid4()))
@@ -197,12 +209,13 @@ class APIPlatformAdapter(BasePlatformAdapter):
         reply_to: Optional[str] = None,
         **kwargs,
     ) -> SendResult:
-        """Push document file path to response queue."""
+        """Push document with download URL to response queue."""
         queue = self._get_queue(chat_id)
         if queue:
+            url = self._register_media(file_path)
             await queue.put({
                 "type": "document",
-                "path": file_path,
+                "url": url,
                 "caption": caption,
             })
         return SendResult(success=True, message_id=str(uuid4()))

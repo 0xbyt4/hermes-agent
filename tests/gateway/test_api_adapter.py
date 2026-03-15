@@ -143,7 +143,8 @@ class TestSendToQueue:
         assert result.success is True
         msg = queue.get_nowait()
         assert msg["type"] == "audio"
-        assert msg["path"] == "/tmp/audio.ogg"
+        assert "/v1/media/" in msg["url"]
+        assert "audio.ogg" in msg["url"]
 
     @pytest.mark.asyncio
     async def test_send_video(self):
@@ -153,7 +154,8 @@ class TestSendToQueue:
         assert result.success is True
         msg = queue.get_nowait()
         assert msg["type"] == "video"
-        assert msg["path"] == "/tmp/video.mp4"
+        assert "/v1/media/" in msg["url"]
+        assert "video.mp4" in msg["url"]
 
     @pytest.mark.asyncio
     async def test_send_document(self):
@@ -163,7 +165,8 @@ class TestSendToQueue:
         assert result.success is True
         msg = queue.get_nowait()
         assert msg["type"] == "document"
-        assert msg["path"] == "/tmp/doc.pdf"
+        assert "/v1/media/" in msg["url"]
+        assert "doc.pdf" in msg["url"]
 
     @pytest.mark.asyncio
     async def test_send_image_file(self):
@@ -173,7 +176,8 @@ class TestSendToQueue:
         assert result.success is True
         msg = queue.get_nowait()
         assert msg["type"] == "image"
-        assert msg["path"] == "/tmp/photo.jpg"
+        assert "/v1/media/" in msg["url"]
+        assert "photo.jpg" in msg["url"]
 
     @pytest.mark.asyncio
     async def test_send_no_queue_is_noop(self):
@@ -686,6 +690,84 @@ class TestSessionTranscript:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["messages"]) == 2
+
+
+# ── Media download tests ─────────────────────────────────────────────────
+
+
+class TestMediaDownload:
+    def test_media_registered_and_downloadable(self, tmp_path):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+
+        # Create a test audio file
+        audio_file = tmp_path / "test_audio.ogg"
+        audio_file.write_bytes(b"\x00" * 100)
+
+        # Register the media file
+        url = adapter._register_media(str(audio_file))
+        assert "/v1/media/" in url
+        assert "test_audio.ogg" in url
+
+        client = TestClient(app)
+        resp = client.get(url)
+        assert resp.status_code == 200
+        assert len(resp.content) == 100
+
+    def test_media_invalid_token_rejected(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+        client = TestClient(app)
+
+        resp = client.get("/v1/media/badtoken/fake.ogg")
+        assert resp.status_code == 404
+
+    def test_media_file_deleted_returns_410(self, tmp_path):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+
+        audio_file = tmp_path / "gone.ogg"
+        audio_file.write_bytes(b"\x00" * 10)
+        url = adapter._register_media(str(audio_file))
+
+        # Delete the file
+        audio_file.unlink()
+
+        client = TestClient(app)
+        resp = client.get(url)
+        assert resp.status_code == 410
+
+    @pytest.mark.asyncio
+    async def test_voice_response_has_downloadable_url(self, tmp_path):
+        """End-to-end: send_voice produces a URL that can be downloaded."""
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+
+        adapter = _make_adapter()
+        app = create_app(adapter)
+
+        audio_file = tmp_path / "tts_output.ogg"
+        audio_file.write_bytes(b"fake-audio-data")
+
+        queue = adapter.register_queue("s1")
+        await adapter.send_voice("s1", str(audio_file))
+
+        msg = queue.get_nowait()
+        assert msg["type"] == "audio"
+
+        client = TestClient(app)
+        resp = client.get(msg["url"])
+        assert resp.status_code == 200
+        assert resp.content == b"fake-audio-data"
 
 
 class TestToolsetWiring:
