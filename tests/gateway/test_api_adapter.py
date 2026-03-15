@@ -949,7 +949,7 @@ class TestWebUI:
         assert "Hermes Agent" in resp.text
         assert "text/html" in resp.headers["content-type"]
 
-    def test_root_has_mic_button(self):
+    def test_root_has_voice_button(self):
         from fastapi.testclient import TestClient
         from gateway.api_server import create_app
 
@@ -958,8 +958,8 @@ class TestWebUI:
         client = TestClient(app)
 
         resp = client.get("/")
-        assert "micBtn" in resp.text
-        assert "toggleMic" in resp.text
+        assert "voice-btn" in resp.text
+        assert "toggleVoice" in resp.text
 
     def test_root_has_file_upload(self):
         from fastapi.testclient import TestClient
@@ -970,10 +970,10 @@ class TestWebUI:
         client = TestClient(app)
 
         resp = client.get("/")
-        assert "fileInput" in resp.text
+        assert "file-input" in resp.text
         assert "/v1/upload" in resp.text
 
-    def test_root_has_streaming_mic(self):
+    def test_root_has_vad_and_voice_mode(self):
         from fastapi.testclient import TestClient
         from gateway.api_server import create_app
 
@@ -982,9 +982,11 @@ class TestWebUI:
         client = TestClient(app)
 
         resp = client.get("/")
-        assert "startStreamingMic" in resp.text
+        assert "startRecording" in resp.text
         assert "SILENCE_THRESHOLD" in resp.text
         assert "voiceMode" in resp.text
+        assert "enterVoiceMode" in resp.text
+        assert "exitVoiceMode" in resp.text
 
 
 class TestToolsetWiring:
