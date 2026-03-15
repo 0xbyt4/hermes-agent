@@ -107,17 +107,40 @@ class APIPlatformAdapter(BasePlatformAdapter):
         os.getenv("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes")),
         "api_media",
     )
+    _MEDIA_TTL_SECONDS = 3600  # 1 hour
+
+    def _cleanup_old_media(self) -> None:
+        """Remove media files older than TTL and evict stale registry entries."""
+        import time as _time
+        now = _time.time()
+        # Clean files from both media and upload dirs
+        for dir_path in [self._MEDIA_DIR]:
+            if not os.path.isdir(dir_path):
+                continue
+            for fname in os.listdir(dir_path):
+                fpath = os.path.join(dir_path, fname)
+                try:
+                    if os.path.isfile(fpath) and now - os.path.getmtime(fpath) > self._MEDIA_TTL_SECONDS:
+                        os.unlink(fpath)
+                except OSError:
+                    pass
+        # Evict stale entries from registry
+        stale_keys = [k for k, v in self._media_files.items() if not os.path.isfile(v)]
+        for k in stale_keys:
+            del self._media_files[k]
 
     def _register_media(self, file_path: str) -> str:
         """Copy media file to a persistent directory and return its download URL.
 
         The original file may be deleted by the caller (e.g. auto-TTS cleanup),
         so we keep our own copy in ~/.hermes/api_media/.
+        Runs TTL cleanup on each call to prevent unbounded growth.
         """
         import shutil
         from gateway.api_server import _sign_media_path, _make_media_url
 
         os.makedirs(self._MEDIA_DIR, exist_ok=True)
+        self._cleanup_old_media()
         filename = os.path.basename(file_path)
         dest = os.path.join(self._MEDIA_DIR, filename)
 

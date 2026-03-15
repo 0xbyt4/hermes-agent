@@ -1036,6 +1036,61 @@ class TestMediaRegistration:
         assert os.path.isfile(path)
 
 
+class TestMediaTTLCleanup:
+    def test_old_files_cleaned_on_register(self, tmp_path):
+        adapter = _make_adapter()
+        adapter._MEDIA_DIR = str(tmp_path / "media")
+        os.makedirs(adapter._MEDIA_DIR)
+
+        # Create an "old" file (fake mtime)
+        old_file = os.path.join(adapter._MEDIA_DIR, "old.ogg")
+        with open(old_file, "wb") as f:
+            f.write(b"old")
+        os.utime(old_file, (0, 0))  # Set mtime to epoch (very old)
+
+        # Create a "new" file
+        new_file = tmp_path / "new.ogg"
+        new_file.write_bytes(b"new")
+
+        # Register new file triggers cleanup
+        adapter._register_media(str(new_file))
+
+        assert not os.path.exists(old_file), "Old file should be cleaned up"
+        # New file copy should exist
+        assert os.path.exists(os.path.join(adapter._MEDIA_DIR, "new.ogg"))
+
+    def test_recent_files_kept(self, tmp_path):
+        adapter = _make_adapter()
+        adapter._MEDIA_DIR = str(tmp_path / "media")
+        os.makedirs(adapter._MEDIA_DIR)
+
+        # Create a recent file
+        recent = os.path.join(adapter._MEDIA_DIR, "recent.ogg")
+        with open(recent, "wb") as f:
+            f.write(b"recent")
+
+        # Create another file to trigger cleanup
+        new_file = tmp_path / "trigger.ogg"
+        new_file.write_bytes(b"trigger")
+        adapter._register_media(str(new_file))
+
+        assert os.path.exists(recent), "Recent file should NOT be cleaned up"
+
+    def test_stale_registry_entries_evicted(self, tmp_path):
+        adapter = _make_adapter()
+        adapter._MEDIA_DIR = str(tmp_path / "media")
+        os.makedirs(adapter._MEDIA_DIR)
+
+        # Manually add a stale entry (file doesn't exist)
+        adapter._media_files["fake_token/gone.ogg"] = "/nonexistent/gone.ogg"
+
+        new_file = tmp_path / "real.ogg"
+        new_file.write_bytes(b"real")
+        adapter._register_media(str(new_file))
+
+        assert "fake_token/gone.ogg" not in adapter._media_files
+
+
 class TestGuessMediaType:
     def test_common_types(self):
         from gateway.api_server import _guess_media_type
