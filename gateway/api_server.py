@@ -149,6 +149,20 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
             return HTMLResponse(index.read_text())
         return HTMLResponse("<h1>Hermes Agent API</h1><p>Web UI not found.</p>")
 
+    @app.get("/manifest.json")
+    async def manifest():
+        f = _static_dir / "manifest.json"
+        if f.is_file():
+            return FileResponse(f, media_type="application/manifest+json")
+        raise HTTPException(404)
+
+    @app.get("/icons/{filename}")
+    async def icons(filename: str):
+        f = _static_dir / "icons" / filename
+        if f.is_file() and f.suffix in (".png", ".svg", ".ico"):
+            return FileResponse(f)
+        raise HTTPException(404)
+
     # ── Auth dependency ──────────────────────────────────────────────
 
     async def verify_api_key(authorization: str = Header(...)) -> None:

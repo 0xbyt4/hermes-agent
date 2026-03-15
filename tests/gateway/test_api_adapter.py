@@ -1432,6 +1432,47 @@ class TestRateLimiter:
             assert resp.status_code == 429
 
 
+# ── PWA tests ────────────────────────────────────────────────────────────
+
+
+class TestPWA:
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from gateway.api_server import create_app
+        return TestClient(create_app(_make_adapter()))
+
+    def test_manifest_served(self):
+        resp = self._client().get("/manifest.json")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "Hermes Agent"
+        assert data["theme_color"] == "#6c5ce7"
+        assert data["display"] == "standalone"
+
+    def test_icon_192_served(self):
+        resp = self._client().get("/icons/icon-192.png")
+        assert resp.status_code == 200
+        assert "image/png" in resp.headers["content-type"]
+
+    def test_icon_512_served(self):
+        resp = self._client().get("/icons/icon-512.png")
+        assert resp.status_code == 200
+
+    def test_apple_touch_icon_served(self):
+        resp = self._client().get("/icons/apple-touch-icon.png")
+        assert resp.status_code == 200
+
+    def test_html_has_manifest_link(self):
+        html = self._client().get("/").text
+        assert 'rel="manifest"' in html
+        assert 'apple-mobile-web-app-capable' in html
+        assert 'theme-color' in html
+
+    def test_icon_path_traversal_blocked(self):
+        resp = self._client().get("/icons/../../etc/passwd")
+        assert resp.status_code != 200
+
+
 class TestToolsetWiring:
     def test_hermes_api_toolset_exists(self):
         from toolsets import TOOLSETS
