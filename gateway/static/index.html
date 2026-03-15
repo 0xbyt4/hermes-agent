@@ -431,15 +431,16 @@ async function sendVoice(blob) {
 async function uploadFile(el) {
     const file = el.files[0]; if (!file) return; el.value = '';
 
-    // Show preview for images and videos
-    if (file.type.startsWith('image/')) {
-        const url = URL.createObjectURL(file);
-        addUserImageMessage(url, file.name);
-    } else if (file.type.startsWith('video/')) {
-        const url = URL.createObjectURL(file);
-        addUserVideoMessage(url, file.name);
+    // Show preview based on file type
+    const blobUrl = URL.createObjectURL(file);
+    if (file.type.startsWith('image/') || /\.(jpg|jpeg|png|gif|svg|webp)$/i.test(file.name)) {
+        addUserImageMessage(blobUrl, file.name);
+    } else if (file.type.startsWith('video/') || /\.(mp4|webm|mov)$/i.test(file.name)) {
+        addUserVideoMessage(blobUrl, file.name);
+    } else if (file.type.startsWith('audio/') || /\.(mp3|ogg|wav|opus|m4a|flac)$/i.test(file.name)) {
+        addUserAudioMessage(blobUrl, file.name);
     } else {
-        addUserMessage(`[File: ${file.name}]`);
+        addUserFileMessage(file.name, file.size);
     }
 
     try {
@@ -539,6 +540,41 @@ function addImageMessage(url, caption) {
     const img = document.createElement('img'); img.src = url; img.onclick = () => window.open(url, '_blank');
     div.appendChild(img);
     messagesEl.insertBefore(div, typingEl); scrollToBottom();
+}
+
+function addUserAudioMessage(url, filename) {
+    const div = document.createElement('div'); div.className = 'msg user';
+    const audio = new Audio(url); audio.preload = 'metadata';
+    const bubble = document.createElement('div'); bubble.className = 'voice-bubble';
+    const btn = document.createElement('button'); btn.className = 'voice-play-btn';
+    const playSvg = '<svg viewBox="0 0 24 24"><polygon points="6,3 20,12 6,21"/></svg>';
+    const pauseSvg = '<svg viewBox="0 0 24 24"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg>';
+    btn.innerHTML = playSvg; bubble.appendChild(btn);
+    const waveform = document.createElement('div'); waveform.className = 'voice-waveform';
+    const bars = []; const barCount = 25;
+    for (let i = 0; i < barCount; i++) { const bar = document.createElement('div'); bar.className = 'bar'; bar.style.height = (6+Math.random()*18)+'px'; bar.style.background = '#fff'; bar.style.opacity = '0.4'; waveform.appendChild(bar); bars.push(bar); }
+    bubble.appendChild(waveform);
+    const timeEl = document.createElement('div'); timeEl.className = 'voice-time'; timeEl.style.color = 'rgba(255,255,255,0.7)'; timeEl.textContent = '0:00';
+    bubble.appendChild(timeEl);
+    const fmt = s => { const m = Math.floor(s/60); const sec = Math.floor(s%60); return m+':'+(sec<10?'0':'')+sec; };
+    audio.addEventListener('loadedmetadata', () => { if (isFinite(audio.duration)) timeEl.textContent = fmt(audio.duration); });
+    let playing = false;
+    function up() { if (!isFinite(audio.duration)) return; const p = audio.currentTime/audio.duration; bars.forEach((b,i) => { b.style.opacity = i<=Math.floor(p*barCount)?'1':'0.4'; }); timeEl.textContent = fmt(audio.currentTime); if (playing) requestAnimationFrame(up); }
+    btn.onclick = () => { if (playing) audio.pause(); else audio.play(); };
+    audio.onplay = () => { playing=true; btn.innerHTML=pauseSvg; up(); };
+    audio.onpause = () => { playing=false; btn.innerHTML=playSvg; };
+    audio.onended = () => { playing=false; btn.innerHTML=playSvg; bars.forEach(b=>b.style.opacity='0.4'); if(isFinite(audio.duration)) timeEl.textContent=fmt(audio.duration); };
+    waveform.onclick = (e) => { if(!isFinite(audio.duration)) return; const r=waveform.getBoundingClientRect(); audio.currentTime=((e.clientX-r.left)/r.width)*audio.duration; if(!playing) audio.play(); };
+    div.appendChild(bubble);
+    if (filename) { const label = document.createElement('div'); label.style.cssText = 'font-size:11px;opacity:0.7;margin-top:4px'; label.textContent = filename; div.appendChild(label); }
+    messagesEl.insertBefore(div, typingEl); scrollToBottom(); saveHistory('user', `[Audio: ${filename}]`);
+}
+
+function addUserFileMessage(filename, size) {
+    const div = document.createElement('div'); div.className = 'msg user';
+    const sizeStr = size < 1024 ? size+'B' : size < 1048576 ? (size/1024).toFixed(1)+'KB' : (size/1048576).toFixed(1)+'MB';
+    div.innerHTML = '<div style="display:flex;align-items:center;gap:8px"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg><div><div>'+filename+'</div><div style="font-size:11px;opacity:0.7">'+sizeStr+'</div></div></div>';
+    messagesEl.insertBefore(div, typingEl); scrollToBottom(); saveHistory('user', `[File: ${filename}]`);
 }
 
 function addUserVideoMessage(url, filename) {
