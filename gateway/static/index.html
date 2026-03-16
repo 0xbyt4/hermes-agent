@@ -157,11 +157,15 @@ body {
         <div class="typing-indicator" id="typing"><span></span><span></span><span></span></div>
     </div>
     <div id="input-bar">
-        <button class="input-btn" id="voice-btn" onclick="toggleVoice()" title="Voice">
+        <button class="input-btn" id="voice-btn" title="Tap: push-to-talk | Hold: streaming mode">
             <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
         </button>
         <textarea id="input" rows="1" placeholder="Type a message..." onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
         <input type="file" id="file-input" class="file-input" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.md,.html,.zip" onchange="uploadFile(this)">
+        <input type="file" id="camera-input" class="file-input" accept="image/*" capture="environment" onchange="uploadFile(this)">
+        <button class="input-btn" id="camera-btn" onclick="document.getElementById('camera-input').click()" title="Take photo">
+            <svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>
+        </button>
         <button class="input-btn" id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach file">
             <svg viewBox="0 0 24 24"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
         </button>
@@ -181,6 +185,22 @@ let audioChunks = [];
 let voiceMode = false;
 let currentTtsAudio = null;
 let autoScroll = true;
+
+// iOS audio unlock: reuse a single Audio element to bypass autoplay restrictions.
+// Once unlocked by a user gesture, subsequent .play() calls work without gesture.
+const _ttsAudio = new Audio();
+let _audioUnlocked = false;
+
+function unlockAudio() {
+    if (_audioUnlocked) return;
+    _ttsAudio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRwmHAAAAAAD/+1DEAAAFAAGf9AAAIiMksr8z0BAAAIA+D4Pg+BAEHygIAgGP/BwfB8HwfAgAAAAAAMf/ygIAhiGP/5QEMQx//8oCAIYhj/+UBAEAwAAAAAAAAAAA';
+    _ttsAudio.volume = 0.01;
+    _ttsAudio.play().then(() => { _audioUnlocked = true; _ttsAudio.pause(); }).catch(() => {});
+}
+
+// Unlock on any user interaction
+document.addEventListener('click', unlockAudio, {once: false});
+document.addEventListener('touchstart', unlockAudio, {once: false});
 
 const messagesEl = document.getElementById('messages');
 const typingEl = document.getElementById('typing');
@@ -276,23 +296,12 @@ function handleResponse(data) {
 }
 
 function cleanResponse(text) {
-    if (text.includes('No home channel is set')) {
-        const lines = text.split('\n');
-        const idx = lines.findIndex(l => l.includes('/sethome'));
-        if (idx >= 0) text = lines.slice(idx + 1).join('\n').trim();
-    }
-    if (text.includes('Error code: 429')) {
-        const m = text.match(/retry in ([\d.]+)s/i);
-        return `Rate limited. ${m ? `Try again in ${Math.ceil(parseFloat(m[1]))}s.` : 'Please wait.'}`;
-    }
     return text;
 }
 
 function detectVoiceMode(text) {
     const l = text.toLowerCase();
-    if (l.includes('voice mode enabled')) { /* voice_only - don't auto enter voice mode */ }
-    else if (l.includes('auto-tts enabled')) { /* all mode - user can enter voice mode */ }
-    else if (l.includes('voice mode disabled') || l.includes('text-only')) {
+    if (l.includes('voice mode disabled') || l.includes('text-only')) {
         if (voiceMode) exitVoiceMode();
     }
 }
@@ -300,20 +309,22 @@ function detectVoiceMode(text) {
 // ── TTS playback with echo prevention ──────────────────────────────
 
 function playTtsAndMaybeRestart(url) {
-    const a = new Audio(url);
-    currentTtsAudio = a;
+    // Reuse the pre-unlocked Audio element for iOS compatibility
+    _ttsAudio.src = url;
+    _ttsAudio.volume = 1;
+    currentTtsAudio = _ttsAudio;
     // Pause mic during TTS
     if (isRecording) stopRecording();
 
-    a.onended = () => {
+    _ttsAudio.onended = () => {
         currentTtsAudio = null;
         if (voiceMode) startRecording();
     };
-    a.onerror = () => {
+    _ttsAudio.onerror = () => {
         currentTtsAudio = null;
         if (voiceMode) startRecording();
     };
-    a.play().catch(() => { currentTtsAudio = null; if (voiceMode) startRecording(); });
+    _ttsAudio.play().catch(() => { currentTtsAudio = null; if (voiceMode) startRecording(); });
 }
 
 // ── Voice mode & VAD ───────────────────────────────────────────────
@@ -321,16 +332,85 @@ function playTtsAndMaybeRestart(url) {
 const SILENCE_THRESHOLD = 0.015;
 const SILENCE_DURATION = 1500;
 
-function toggleVoice() {
-    if (voiceMode) exitVoiceMode();
-    else enterVoiceMode();
+// ── Mic button: tap = push-to-talk, long press = streaming mode ──
+
+const LONG_PRESS_MS = 500;
+let _pressTimer = null;
+let _pressHandled = false;
+
+(function initVoiceBtn() {
+    const btn = document.getElementById('voice-btn');
+
+    function onDown(e) {
+        e.preventDefault();
+        _pressHandled = false;
+        _pressTimer = setTimeout(() => {
+            _pressHandled = true;
+            if (voiceMode) exitVoiceMode();
+            else enterVoiceMode();
+        }, LONG_PRESS_MS);
+    }
+
+    function onUp(e) {
+        e.preventDefault();
+        clearTimeout(_pressTimer);
+        if (_pressHandled) return;
+        // Short tap: push-to-talk
+        if (isRecording) stopRecording();
+        else startPushToTalk();
+    }
+
+    function onCancel(e) {
+        clearTimeout(_pressTimer);
+    }
+
+    // Mouse
+    btn.addEventListener('mousedown', onDown);
+    btn.addEventListener('mouseup', onUp);
+    btn.addEventListener('mouseleave', onCancel);
+    // Touch
+    btn.addEventListener('touchstart', onDown, {passive: false});
+    btn.addEventListener('touchend', onUp, {passive: false});
+    btn.addEventListener('touchcancel', onCancel);
+})();
+
+// ── Push-to-talk (tap mic, works in any mode) ────────────────────
+
+async function startPushToTalk() {
+    if (isRecording || currentTtsAudio) return;
+    // If in streaming mode, pause it for manual recording
+    if (voiceMode) stopRecording();
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        });
+        audioChunks = [];
+        const mimeType = getSupportedMime();
+        mediaRecorder = new MediaRecorder(stream, mimeType ? {mimeType} : {});
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+        mediaRecorder.onstop = async () => {
+            stream.getTracks().forEach(t => t.stop());
+            if (audioChunks.length === 0) return;
+            const blob = new Blob(audioChunks, {type: mediaRecorder.mimeType});
+            await sendVoice(blob);
+        };
+        mediaRecorder.start();
+        isRecording = true;
+        document.getElementById('voice-btn').classList.add('recording');
+    } catch (err) {
+        addSystemMessage('Microphone access denied');
+    }
 }
+
+// ── Streaming voice mode (long press, always voice all) ──────────
 
 function enterVoiceMode() {
     voiceMode = true;
     document.getElementById('voice-btn').classList.add('voice-mode');
     document.getElementById('input-bar').classList.add('voice-mode-active');
-    addSystemMessage('Listening... speak and I will respond');
+    addSystemMessage('Streaming mode - listening...');
+    // Tell backend to enable TTS for all replies
+    sendCommand('/voice tts');
     startRecording();
 }
 
@@ -340,7 +420,17 @@ function exitVoiceMode() {
     document.getElementById('input-bar').classList.remove('voice-mode-active');
     if (currentTtsAudio) { currentTtsAudio.pause(); currentTtsAudio = null; }
     stopRecording();
-    addSystemMessage('Stopped listening');
+    // Switch to voice_only so push-to-talk still gets TTS
+    sendCommand('/voice on');
+    addSystemMessage('Streaming mode off');
+}
+
+function sendCommand(cmd) {
+    fetch(`${API_BASE}/v1/chat`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: cmd, session_id: sessionId }),
+    }).catch(() => {});
 }
 
 async function startRecording() {
@@ -362,7 +452,7 @@ async function startRecording() {
         let vadActive = true;
 
         const mimeType = getSupportedMime();
-        mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+        mediaRecorder = new MediaRecorder(stream, mimeType ? {mimeType} : {});
         mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
         mediaRecorder.onstop = async () => {
             vadActive = false;
@@ -372,13 +462,14 @@ async function startRecording() {
                 if (voiceMode) setTimeout(startRecording, 200);
                 return;
             }
-            const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+            const blob = new Blob(audioChunks, {type: mediaRecorder.mimeType});
             await sendVoice(blob);
         };
         mediaRecorder.start();
         isRecording = true;
         document.getElementById('voice-btn').classList.add('recording');
 
+        // VAD: detect silence to auto-stop
         function checkVAD() {
             if (!vadActive || !isRecording) return;
             analyser.getFloatTimeDomainData(dataArray);
@@ -396,9 +487,9 @@ async function startRecording() {
                     return;
                 }
             }
-            requestAnimationFrame(checkVAD);
+            setTimeout(checkVAD, 50);
         }
-        requestAnimationFrame(checkVAD);
+        setTimeout(checkVAD, 50);
     } catch (err) {
         addSystemMessage('Microphone access denied');
         if (voiceMode) exitVoiceMode();

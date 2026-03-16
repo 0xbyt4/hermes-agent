@@ -26,6 +26,8 @@ from uuid import uuid4
 import tempfile
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+
+from gateway.platforms.base import MessageType
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
@@ -198,11 +200,11 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
 
     # ── Shared response collector ───────────────────────────────────
 
-    async def _collect_response(sid: str, message: str) -> ChatResponse:
+    async def _collect_response(sid: str, message: str, message_type: MessageType = MessageType.TEXT) -> ChatResponse:
         """Register queue, send message, collect response, unregister."""
         queue = adapter.register_queue(sid)
         try:
-            await adapter.handle_request(sid, message)
+            await adapter.handle_request(sid, message, message_type=message_type)
             text_parts: list[str] = []
             media: list[dict] = []
             while True:
@@ -400,9 +402,9 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
             except OSError:
                 pass
 
-        # Send transcript to agent
+        # Send transcript to agent as voice message
         sid = session_id or str(uuid4())
-        return await _collect_response(sid, transcript)
+        return await _collect_response(sid, transcript, message_type=MessageType.VOICE)
 
     # ── Sessions ─────────────────────────────────────────────────────
 

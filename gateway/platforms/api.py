@@ -19,6 +19,7 @@ from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
     BasePlatformAdapter,
     MessageEvent,
+    MessageType,
     SendResult,
 )
 from gateway.session import SessionSource, build_session_key
@@ -335,7 +336,8 @@ class APIPlatformAdapter(BasePlatformAdapter):
     # ── Public method for FastAPI routes ──────────────────────────────────
 
     async def handle_request(
-        self, chat_id: str, text: str, user_id: Optional[str] = None
+        self, chat_id: str, text: str, user_id: Optional[str] = None,
+        message_type: MessageType = MessageType.TEXT,
     ) -> None:
         """Called by FastAPI route. Creates MessageEvent and dispatches.
 
@@ -351,5 +353,6 @@ class APIPlatformAdapter(BasePlatformAdapter):
                 chat_type="channel",
             ),
             message_id=str(uuid4()),
+            message_type=message_type,
         )
         await self.handle_message(event)
