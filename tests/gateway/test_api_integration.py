@@ -440,6 +440,213 @@ class TestWebSocketContract:
 
         assert adapter._build_session_key("wsc") not in adapter._response_queues
 
+    def test_ws_sequential_messages_should_not_interfere(self):
+        """Multiple messages on same WS connection SHOULD be processed one-at-a-time without errors.
+        WS handler processes messages sequentially (receive -> process -> receive), so no busy error."""
+        from fastapi.testclient import TestClient
+        from gateway.api_server import _rate_limiter
+
+        adapter = _make_adapter()
+        n = {"c": 0}
+
+        async def handler(event):
+            n["c"] += 1
+            sk = adapter._build_session_key(event.source.chat_id)
+            q = adapter._response_queues.get(sk)
+            if q:
+                await q.put({"type": "message", "content": f"reply {n['c']}"})
+                await q.put({"type": "done"})
+
+        adapter.handle_message = handler
+        client = TestClient(_make_app(adapter))
+        _rate_limiter._buckets.clear()
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            with client.websocket_connect("/v1/chat/stream") as ws:
+                ws.send_json({"type": "auth", "token": "k", "session_id": "seq-ws"})
+                ws.receive_json()
+
+                # Send two messages sequentially
+                for i in range(3):
+                    ws.send_json({"message": f"msg {i}"})
+                    msgs = []
+                    while True:
+                        m = ws.receive_json()
+                        msgs.append(m)
+                        if m["type"] == "done":
+                            break
+                    # Each should get its own response without errors
+                    assert not any(m["type"] == "error" for m in msgs)
+
+        assert n["c"] == 3
+
+    def test_ws_voice_flag_should_stream_like_text(self):
+        """Voice message via WS SHOULD stream response token-by-token just like text."""
+        from fastapi.testclient import TestClient
+
+        adapter = _make_adapter()
+
+        async def multi_chunk_handler(event):
+            sk = adapter._build_session_key(event.source.chat_id)
+            q = adapter._response_queues.get(sk)
+            if q:
+                # Simulate multi-chunk streaming
+                await q.put({"type": "message", "content": "First chunk. "})
+                await q.put({"type": "message", "content": "Second chunk."})
+                await q.put({"type": "done"})
+
+        adapter.handle_message = multi_chunk_handler
+        client = TestClient(_make_app(adapter))
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            with client.websocket_connect("/v1/chat/stream") as ws:
+                ws.send_json({"type": "auth", "token": "k"})
+                ws.receive_json()
+
+                # Send voice message
+                ws.send_json({"message": "voice transcript", "voice": True})
+
+                chunks = []
+                while True:
+                    msg = ws.receive_json()
+                    if msg["type"] == "message":
+                        chunks.append(msg["content"])
+                    if msg["type"] == "done":
+                        break
+
+        # SHOULD receive multiple chunks (streaming), not single blob
+        assert len(chunks) == 2
+        assert chunks[0] == "First chunk. "
+        assert chunks[1] == "Second chunk."
+
+    def test_ws_voice_with_media_should_stream_text_then_media(self):
+        """Voice response with TTS audio SHOULD stream text first, then media in done."""
+        from fastapi.testclient import TestClient
+
+        adapter = _make_adapter()
+
+        async def text_then_audio_handler(event):
+            sk = adapter._build_session_key(event.source.chat_id)
+            q = adapter._response_queues.get(sk)
+            if q:
+                await q.put({"type": "message", "content": "Here is my answer."})
+                await q.put({"type": "audio", "url": "/v1/media/tok/tts.ogg", "caption": None})
+                await q.put({"type": "done"})
+
+        adapter.handle_message = text_then_audio_handler
+        client = TestClient(_make_app(adapter))
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            with client.websocket_connect("/v1/chat/stream") as ws:
+                ws.send_json({"type": "auth", "token": "k"})
+                ws.receive_json()
+
+                ws.send_json({"message": "what is this", "voice": True})
+
+                messages = []
+                while True:
+                    msg = ws.receive_json()
+                    messages.append(msg)
+                    if msg["type"] == "done":
+                        break
+
+        types = [m["type"] for m in messages]
+        # Text SHOULD come before audio, done at the end
+        assert types == ["message", "audio", "done"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SPEC: Voice transcribe+WS flow SHOULD work end-to-end
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestVoiceStreamingContract:
+    """The new voice flow: transcribe via HTTP, then stream response via WS."""
+
+    def test_transcribe_should_not_call_agent(self):
+        """POST /v1/transcribe SHOULD only do STT, not send to agent."""
+        from fastapi.testclient import TestClient
+        adapter = _make_adapter()
+        events = _wire_agent(adapter, "should not reach")
+        client = TestClient(_make_app(adapter))
+
+        fake_result = {"success": True, "transcript": "just transcribe",
+                       "language": "en", "language_probability": 0.95}
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fake_result
+
+        with patch.dict(os.environ, {"API_KEY": "k"}), \
+             patch("gateway.api_server.asyncio.to_thread", fake_to_thread):
+            resp = client.post("/v1/transcribe",
+                               files={"file": ("v.webm", b"audio", "audio/webm")},
+                               headers={"Authorization": "Bearer k"})
+
+        assert resp.status_code == 200
+        assert resp.json()["transcript"] == "just transcribe"
+        assert len(events) == 0  # agent NOT called
+
+    def test_transcribe_then_ws_should_produce_voice_typed_response(self):
+        """Full flow: transcribe -> WS send with voice flag -> response SHOULD have MessageType.VOICE."""
+        from fastapi.testclient import TestClient
+        adapter = _make_adapter()
+        events = _wire_agent(adapter, "voice streaming reply")
+        client = TestClient(_make_app(adapter))
+
+        fake_result = {"success": True, "transcript": "hello from mic",
+                       "language": "en", "language_probability": 0.9}
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fake_result
+
+        with patch.dict(os.environ, {"API_KEY": "k"}), \
+             patch("gateway.api_server.asyncio.to_thread", fake_to_thread):
+            # Step 1: Transcribe
+            tr = client.post("/v1/transcribe",
+                             files={"file": ("v.webm", b"audio", "audio/webm")},
+                             headers={"Authorization": "Bearer k"})
+            transcript = tr.json()["transcript"]
+
+        # Step 2: Send transcript via WS with voice flag
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            with client.websocket_connect("/v1/chat/stream") as ws:
+                ws.send_json({"type": "auth", "token": "k", "session_id": "vflow1"})
+                ws.receive_json()
+
+                ws.send_json({"message": transcript, "voice": True})
+                messages = []
+                while True:
+                    msg = ws.receive_json()
+                    messages.append(msg)
+                    if msg["type"] == "done":
+                        break
+
+        # Agent should have received VOICE typed message
+        assert len(events) == 1
+        assert events[0].message_type == MessageType.VOICE
+        assert events[0].text == "hello from mic"
+        # Response should have streamed
+        assert any(m.get("content") == "voice streaming reply" for m in messages)
+
+    def test_transcribe_failure_should_not_reach_ws(self):
+        """If transcription fails, agent SHOULD NOT be called."""
+        from fastapi.testclient import TestClient
+        adapter = _make_adapter()
+        events = _wire_agent(adapter, "should not reach")
+        client = TestClient(_make_app(adapter))
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return {"success": False, "error": "STT down"}
+
+        with patch.dict(os.environ, {"API_KEY": "k"}), \
+             patch("gateway.api_server.asyncio.to_thread", fake_to_thread):
+            resp = client.post("/v1/transcribe",
+                               files={"file": ("v.ogg", b"bad", "audio/ogg")},
+                               headers={"Authorization": "Bearer k"})
+
+        assert resp.status_code == 422
+        assert len(events) == 0
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # SPEC: Uploaded files SHOULD be downloadable with valid HMAC token
