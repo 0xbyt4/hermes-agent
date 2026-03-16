@@ -106,60 +106,22 @@ class RecallEngine:
     def config(self) -> RecallConfig:
         return self._config
 
-    def recall(
+    def _score_and_rank(
         self,
-        query: str,
-        limit: Optional[int] = None,
+        candidates: List[ScoredMemory],
+        limit: int,
         scope: Optional[str] = None,
         categories: Optional[List[str]] = None,
-        similarity_threshold: Optional[float] = None,
-        include_forgotten: bool = False,
     ) -> List[ScoredMemory]:
         """
-        Recall memories relevant to a natural language query.
+        Filter, score, rank, and record access for candidate memories.
 
-        Steps:
-          1. Embed the query text
-          2. Find semantically similar memories from the store
-          3. Apply scope and category filters
-          4. Compute composite score (similarity + recency + importance)
-          5. Re-rank by composite score and return top results
-
-        Args:
-            query: Natural language query text
-            limit: Max results to return (default from config)
-            scope: Filter to memories under this scope prefix
-            categories: Filter to memories with any of these categories
-            similarity_threshold: Min cosine similarity (default from config)
-            include_forgotten: Include soft-deleted memories
-
-        Returns:
-            List of ScoredMemory sorted by composite score (descending)
+        Shared logic used by both recall() and recall_by_embedding().
         """
-        effective_limit = limit or self._config.default_limit
-        threshold = similarity_threshold or self._config.similarity_threshold
-
-        # Step 1: Embed the query
-        try:
-            query_embedding = self._embedder.embed_text(query)
-        except Exception as e:
-            logger.warning("Failed to embed query: %s", e)
-            return []
-
-        # Step 2: Get similar memories from store
-        # Fetch more than needed since we'll filter and re-rank
-        fetch_limit = effective_limit * 3
-        candidates = self._store.search_similar(
-            query_embedding,
-            threshold=threshold,
-            limit=fetch_limit,
-            include_forgotten=include_forgotten,
-        )
-
         if not candidates:
             return []
 
-        # Step 3: Apply filters
+        # Apply filters
         filtered = candidates
         if scope:
             filtered = [
@@ -176,7 +138,7 @@ class RecallEngine:
         if not filtered:
             return []
 
-        # Step 4: Compute composite scores
+        # Compute composite scores
         now = time.time()
         scored = []
         for sm in filtered:
@@ -203,15 +165,45 @@ class RecallEngine:
                 match_reasons=match_reasons,
             ))
 
-        # Step 5: Sort by composite score descending
+        # Sort by composite score descending
         scored.sort(key=lambda s: s.score, reverse=True)
 
         # Record access for returned memories
-        results = scored[:effective_limit]
+        results = scored[:limit]
         for sm in results:
             self._store.record_access(sm.memory.id)
 
         return results
+
+    def recall(
+        self,
+        query: str,
+        limit: Optional[int] = None,
+        scope: Optional[str] = None,
+        categories: Optional[List[str]] = None,
+        similarity_threshold: Optional[float] = None,
+        include_forgotten: bool = False,
+    ) -> List[ScoredMemory]:
+        """
+        Recall memories relevant to a natural language query.
+
+        Raises on embedding failure so callers can report the error.
+        """
+        effective_limit = limit or self._config.default_limit
+        threshold = similarity_threshold or self._config.similarity_threshold
+
+        # Embed the query — let exceptions propagate to caller
+        query_embedding = self._embedder.embed_text(query)
+
+        fetch_limit = effective_limit * 3
+        candidates = self._store.search_similar(
+            query_embedding,
+            threshold=threshold,
+            limit=fetch_limit,
+            include_forgotten=include_forgotten,
+        )
+
+        return self._score_and_rank(candidates, effective_limit, scope, categories)
 
     def recall_by_embedding(
         self,
@@ -225,8 +217,7 @@ class RecallEngine:
         """
         Recall memories using a pre-computed embedding vector.
 
-        Same as recall() but skips the embedding step. Useful when
-        the caller already has an embedding (e.g., from a batch operation).
+        Same as recall() but skips the embedding step.
         """
         effective_limit = limit or self._config.default_limit
         threshold = similarity_threshold or self._config.similarity_threshold
@@ -239,58 +230,7 @@ class RecallEngine:
             include_forgotten=include_forgotten,
         )
 
-        if not candidates:
-            return []
-
-        filtered = candidates
-        if scope:
-            filtered = [
-                sm for sm in filtered
-                if sm.memory.scope.startswith(scope)
-            ]
-        if categories:
-            cat_set = set(categories)
-            filtered = [
-                sm for sm in filtered
-                if cat_set.intersection(sm.memory.categories)
-            ]
-
-        if not filtered:
-            return []
-
-        now = time.time()
-        scored = []
-        for sm in filtered:
-            recency = compute_recency(
-                sm.memory.last_accessed, now, self._config.recency_half_life_days
-            )
-            score = composite_score(
-                similarity=sm.similarity,
-                recency=recency,
-                importance=sm.memory.importance,
-                weights=self._config,
-            )
-
-            match_reasons = list(sm.match_reasons)
-            if recency > 0.8:
-                match_reasons.append("recent")
-            if sm.memory.importance > 0.7:
-                match_reasons.append("important")
-
-            scored.append(ScoredMemory(
-                memory=sm.memory,
-                score=score,
-                similarity=sm.similarity,
-                match_reasons=match_reasons,
-            ))
-
-        scored.sort(key=lambda s: s.score, reverse=True)
-
-        results = scored[:effective_limit]
-        for sm in results:
-            self._store.record_access(sm.memory.id)
-
-        return results
+        return self._score_and_rank(candidates, effective_limit, scope, categories)
 
     def add_and_recall(
         self,
@@ -302,10 +242,6 @@ class RecallEngine:
     ) -> Dict:
         """
         Add a new memory and find related existing memories.
-
-        This is the primary operation for cognitive encoding:
-        embed the content, store it, then find related memories
-        that might need consolidation or contradiction detection.
 
         Returns:
             Dict with 'memory_id' and 'related' (list of ScoredMemory)

@@ -377,3 +377,40 @@ class TestCount:
 
     def test_count_empty(self, store):
         assert store.count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Scope wildcard safety
+# ---------------------------------------------------------------------------
+
+
+class TestScopeEscape:
+    def test_underscore_in_scope_not_wildcard(self, store):
+        """Underscore in scope should be literal, not SQL LIKE wildcard."""
+        store.add_memory("match", scope="/user_prefs")
+        store.add_memory("no match", scope="/user/prefs")
+
+        results = store.get_all_active("/user_prefs")
+        assert len(results) == 1
+        assert results[0].content == "match"
+
+    def test_percent_in_scope_not_wildcard(self, store):
+        """Percent in scope should be literal, not SQL LIKE wildcard."""
+        store.add_memory("match", scope="/100%done")
+        store.add_memory("no match", scope="/100other")
+
+        results = store.get_all_active("/100%done")
+        assert len(results) == 1
+        assert results[0].content == "match"
+
+    def test_soft_delete_by_scope_underscore(self, store):
+        """soft_delete_by_scope should also escape wildcards."""
+        store.add_memory("keep", scope="/user/data")
+        store.add_memory("delete", scope="/user_data")
+
+        count = store.soft_delete_by_scope("/user_data")
+        assert count == 1
+
+        active = store.get_all_active()
+        assert len(active) == 1
+        assert active[0].content == "keep"

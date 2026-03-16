@@ -258,3 +258,34 @@ class TestForgettingManager:
         result = manager.run_forgetting_cycle()
         assert result.pruned_count == 1
         assert result.total_active == 1
+
+    def test_maybe_run_cycle_runs_when_due(self, store):
+        for i in range(6):
+            store.add_memory(f"mem-{i}", importance=0.8)
+
+        manager = ForgettingManager(store=store)
+        assert manager._last_cycle_run is None
+
+        result = manager.maybe_run_cycle()
+        assert result is not None
+        assert manager._last_cycle_run is not None
+
+    def test_maybe_run_cycle_skips_when_too_soon(self, store):
+        for i in range(6):
+            store.add_memory(f"mem-{i}", importance=0.8)
+
+        manager = ForgettingManager(store=store)
+        # First run should work
+        result1 = manager.maybe_run_cycle()
+        assert result1 is not None
+
+        # Second run immediately should be skipped
+        result2 = manager.maybe_run_cycle()
+        assert result2 is None
+
+    def test_maybe_run_cycle_skips_few_memories(self, store):
+        store.add_memory("only one")
+        manager = ForgettingManager(store=store)
+        result = manager.maybe_run_cycle()
+        assert result is None
+        assert manager._last_cycle_run is None

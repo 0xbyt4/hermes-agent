@@ -190,6 +190,7 @@ class ForgettingManager:
         self._decay_half_life = decay_half_life_days
         self._prune_threshold = prune_threshold
         self._consolidation_similarity = consolidation_similarity
+        self._last_cycle_run: Optional[float] = None
 
     def run_forgetting_cycle(
         self,
@@ -298,3 +299,23 @@ class ForgettingManager:
                 return False
 
         return self._store.count() >= 5
+
+    def maybe_run_cycle(
+        self, exempt_scopes: Optional[List[str]] = None,
+    ) -> Optional[ForgettingResult]:
+        """
+        Run a forgetting cycle if enough time has passed and enough memories exist.
+
+        Tracks last run time internally.
+        """
+        if not self.should_run_cycle(self._last_cycle_run):
+            return None
+
+        result = self.run_forgetting_cycle(exempt_scopes)
+        self._last_cycle_run = time.time()
+        logger.info(
+            "Forgetting cycle: decayed=%d, consolidated=%d, pruned=%d, active=%d",
+            result.decayed_count, result.consolidated_count,
+            result.pruned_count, result.total_active,
+        )
+        return result

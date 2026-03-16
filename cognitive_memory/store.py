@@ -21,6 +21,11 @@ from cognitive_memory.embeddings import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
+
+def _escape_like(value: str) -> str:
+    """Escape special LIKE pattern characters (_ and %)."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 # Default database location
 DEFAULT_DB_DIR = os.path.join(
     os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")),
@@ -185,10 +190,10 @@ class CognitiveStore:
             rows = conn.execute(
                 """
                 SELECT * FROM cognitive_memories
-                WHERE forgotten = 0 AND scope LIKE ?
+                WHERE forgotten = 0 AND scope LIKE ? ESCAPE '\\'
                 ORDER BY importance DESC, created_at DESC
                 """,
-                (scope + "%",),
+                (_escape_like(scope) + "%",),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -317,7 +322,7 @@ class CognitiveStore:
         Returns the number of memories affected.
         """
         conn = self._get_conn()
-        params: list = [time.time(), scope + "%"]
+        params: list = [time.time(), _escape_like(scope) + "%"]
 
         age_filter = ""
         if older_than_days is not None:
@@ -329,7 +334,7 @@ class CognitiveStore:
             f"""
             UPDATE cognitive_memories
             SET forgotten = 1, updated_at = ?
-            WHERE forgotten = 0 AND scope LIKE ? {age_filter}
+            WHERE forgotten = 0 AND scope LIKE ? ESCAPE '\\' {age_filter}
             """,
             params,
         )
@@ -413,6 +418,12 @@ class CognitiveStore:
         if hasattr(self._local, "conn") and self._local.conn:
             self._local.conn.close()
             self._local.conn = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _row_to_memory(
         self, row: sqlite3.Row, embedding: Optional[List[float]] = None

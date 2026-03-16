@@ -258,14 +258,14 @@ class TestRecall:
         results = engine.recall("anything")
         assert results == []
 
-    def test_recall_embedding_failure_returns_empty(self, store):
+    def test_recall_embedding_failure_raises(self, store):
         embedder = MagicMock()
         embedder.embed_text = MagicMock(side_effect=RuntimeError("API down"))
         engine = RecallEngine(store=store, embedder=embedder)
 
         store.add_memory("test", embedding=[1.0, 0.0, 0.0])
-        results = engine.recall("query")
-        assert results == []
+        with pytest.raises(RuntimeError, match="API down"):
+            engine.recall("query")
 
     def test_recall_match_reasons(self, store):
         now = time.time()

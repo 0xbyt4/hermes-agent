@@ -50,7 +50,14 @@ def cognitive_memory_tool(
     if action == "recall":
         return _handle_recall(engine, query, scope, categories, limit)
     elif action == "store":
-        return _handle_store(engine, store, content, scope, importance, categories)
+        result = _handle_store(engine, store, content, scope, importance, categories)
+        # Trigger forgetting cycle if due
+        if forgetting:
+            try:
+                forgetting.maybe_run_cycle()
+            except Exception as e:
+                logger.debug("Forgetting cycle failed (non-fatal): %s", e)
+        return result
     elif action == "forget":
         return _handle_forget(store, query, scope)
     elif action == "status":
@@ -75,12 +82,19 @@ def _handle_recall(
             "error": "Query is required for recall action.",
         }, ensure_ascii=False)
 
-    results = engine.recall(
-        query=query,
-        limit=limit,
-        scope=scope if scope != "/" else None,
-        categories=categories,
-    )
+    try:
+        results = engine.recall(
+            query=query,
+            limit=limit,
+            scope=scope if scope != "/" else None,
+            categories=categories,
+        )
+    except Exception as e:
+        logger.warning("Recall failed: %s", e)
+        return json.dumps({
+            "success": False,
+            "error": f"Recall failed (embedding API may be down): {e}",
+        }, ensure_ascii=False)
 
     memories = []
     for sm in results:
@@ -118,29 +132,44 @@ def _handle_store(
             "error": "Content is required for store action.",
         }, ensure_ascii=False)
 
-    # Auto-encode the content
-    encoding = encode(content)
+    # Step 1: Embed content and find similar existing memories BEFORE encoding
+    embedding = None
+    candidates = []
+    try:
+        embedding = engine._embedder.embed_text(content)
+        candidates = store.search_similar(embedding, threshold=0.5, limit=5)
+    except Exception as e:
+        logger.warning("Embedding failed during store (will store without): %s", e)
+
+    # Step 2: Encode with candidates so contradiction detection actually works
+    encoding = encode(content, candidates=candidates if candidates else None)
     final_categories = categories or encoding.categories
     final_importance = importance if importance is not None else encoding.importance
 
-    # Store and find related memories
-    result = engine.add_and_recall(
+    # Step 3: Store the memory
+    memory_id = store.add_memory(
         content=content,
+        embedding=embedding,
         scope=scope,
         importance=final_importance,
         categories=final_categories,
-        recall_limit=3,
     )
+
+    # Step 4: Supersede contradicted memories
+    superseded = []
+    for c in encoding.contradictions:
+        if c.existing_memory:
+            store.soft_delete(c.existing_memory.id)
+            superseded.append(c.existing_memory.id)
 
     response = {
         "success": True,
         "action": "store",
-        "memory_id": result["memory_id"],
+        "memory_id": memory_id,
         "categories": final_categories,
         "importance": round(final_importance, 3),
     }
 
-    # Include contradiction warnings
     if encoding.contradictions:
         response["contradictions"] = [
             {
@@ -148,20 +177,24 @@ def _handle_store(
                 "existing_content": c.existing_memory.content[:100] if c.existing_memory else None,
                 "confidence": round(c.confidence, 3),
                 "reason": c.reason,
+                "superseded": c.existing_memory.id in superseded if c.existing_memory else False,
             }
             for c in encoding.contradictions
         ]
 
-    # Include related memories
-    if result["related"]:
-        response["related"] = [
-            {
-                "id": sm.memory.id,
-                "content": sm.memory.content[:100],
-                "similarity": round(sm.similarity, 3),
-            }
-            for sm in result["related"][:3]
-        ]
+    # Related memories (exclude self and superseded)
+    if candidates:
+        superseded_set = set(superseded)
+        related = [sm for sm in candidates if sm.memory.id not in superseded_set][:3]
+        if related:
+            response["related"] = [
+                {
+                    "id": sm.memory.id,
+                    "content": sm.memory.content[:100],
+                    "similarity": round(sm.similarity, 3),
+                }
+                for sm in related
+            ]
 
     return json.dumps(response, ensure_ascii=False)
 

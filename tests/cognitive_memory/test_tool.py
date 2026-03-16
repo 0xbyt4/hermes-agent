@@ -261,3 +261,159 @@ class TestUnknownAction:
         result = _call("invalid", engine=engine, store=store)
         assert result["success"] is False
         assert "Unknown action" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Contradiction detection (store must find and supersede contradictions)
+# ---------------------------------------------------------------------------
+
+
+class TestContradictionDetection:
+    def test_store_detects_contradiction(self, store, engine):
+        """When storing contradictory info, the old memory should be superseded."""
+        emb = [1.0, 0.0, 0.0]
+        store.add_memory(
+            "The server uses port 3000",
+            embedding=emb,
+            importance=0.7,
+            categories=["fact"],
+        )
+
+        result = _call(
+            "store", engine=engine, store=store,
+            content="Actually the server does not use port 3000, it should be 8080",
+        )
+        assert result["success"] is True
+        # Should detect contradiction
+        assert "contradictions" in result
+        assert len(result["contradictions"]) >= 1
+        assert result["contradictions"][0]["superseded"] is True
+
+    def test_superseded_memory_is_forgotten(self, store, engine):
+        """Superseded memory should be soft-deleted."""
+        emb = [1.0, 0.0, 0.0]
+        old_id = store.add_memory(
+            "We use PostgreSQL for the database",
+            embedding=emb,
+            importance=0.7,
+            categories=["fact"],
+        )
+
+        _call(
+            "store", engine=engine, store=store,
+            content="Actually we do not use PostgreSQL, we switched to MySQL",
+        )
+
+        old_mem = store.get_memory(old_id)
+        assert old_mem.forgotten is True
+
+    def test_no_contradiction_for_similar_content(self, store, engine):
+        """Similar but non-contradictory content should not trigger supersede."""
+        emb = [1.0, 0.0, 0.0]
+        old_id = store.add_memory(
+            "Python is a programming language",
+            embedding=emb,
+            importance=0.5,
+            categories=["fact"],
+        )
+
+        result = _call(
+            "store", engine=engine, store=store,
+            content="Python is a great programming language",
+        )
+        assert result["success"] is True
+
+        old_mem = store.get_memory(old_id)
+        assert old_mem.forgotten is False
+
+
+# ---------------------------------------------------------------------------
+# Recall error handling (embedding API failure)
+# ---------------------------------------------------------------------------
+
+
+class TestRecallErrorHandling:
+    def test_recall_reports_embedding_failure(self, store):
+        """When embedding API fails, recall should return error, not empty results."""
+        embedder = MagicMock()
+        embedder.dimensions = 3
+        embedder.embed_text = MagicMock(side_effect=RuntimeError("API down"))
+        engine = RecallEngine(store=store, embedder=embedder)
+
+        store.add_memory("test", embedding=[1.0, 0.0, 0.0])
+        result = _call("recall", engine=engine, store=store, query="test")
+        assert result["success"] is False
+        assert "error" in result
+        assert "API" in result["error"] or "failed" in result["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Forgetting cycle trigger
+# ---------------------------------------------------------------------------
+
+
+class TestForgettingCycleTrigger:
+    def test_store_triggers_forgetting_cycle(self, store, engine):
+        """Store action should trigger forgetting cycle when due."""
+        from cognitive_memory.extraction import ForgettingManager
+
+        # Add enough memories for cycle to be eligible
+        for i in range(6):
+            store.add_memory(f"memory-{i}", importance=0.8)
+
+        forgetting = ForgettingManager(store=store)
+        # Ensure cycle hasn't run yet
+        assert forgetting._last_cycle_run is None
+
+        result = cognitive_memory_tool(
+            action="store",
+            content="I prefer dark mode for all my editors",
+            engine=engine,
+            store=store,
+            forgetting=forgetting,
+        )
+        parsed = json.loads(result)
+        assert parsed["success"] is True
+        # Cycle should have been triggered
+        assert forgetting._last_cycle_run is not None
+
+    def test_recall_does_not_trigger_forgetting(self, store, engine):
+        """Recall action should NOT trigger forgetting cycle."""
+        from cognitive_memory.extraction import ForgettingManager
+
+        emb = [1.0, 0.0, 0.0]
+        for i in range(6):
+            store.add_memory(f"memory-{i}", embedding=emb, importance=0.8)
+
+        forgetting = ForgettingManager(store=store)
+
+        cognitive_memory_tool(
+            action="recall",
+            query="test",
+            engine=engine,
+            store=store,
+            forgetting=forgetting,
+        )
+        assert forgetting._last_cycle_run is None
+
+
+# ---------------------------------------------------------------------------
+# Scope wildcard safety
+# ---------------------------------------------------------------------------
+
+
+class TestScopeWildcard:
+    def test_scope_with_underscore(self, store, engine):
+        """Scope containing underscore should not match as SQL wildcard."""
+        emb = [1.0, 0.0, 0.0]
+        store.add_memory("match", embedding=emb, scope="/user_prefs")
+        store.add_memory("no match", embedding=emb, scope="/user/prefs")
+
+        result = _call(
+            "recall", engine=engine, store=store,
+            query="test", scope="/user_prefs",
+        )
+        assert result["success"] is True
+        contents = [m["content"] for m in result["memories"]]
+        assert "match" in contents
+        assert "no match" not in contents
