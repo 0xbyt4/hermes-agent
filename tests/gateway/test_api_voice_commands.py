@@ -449,3 +449,187 @@ class TestStreamingModeCommands:
                     pass
 
         assert n["c"] == 2  # both commands processed
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SPEC: Voice mode x Input type combination matrix
+#
+# Each combination defines whether TTS SHOULD fire:
+#
+#                  TEXT input       PUSH-TO-TALK      STREAMING
+#                  (TEXT type)      (VOICE type)      (VOICE type)
+# ─────────────────────────────────────────────────────────────
+# fresh (no cmd)   NO TTS           TTS (K1)          TTS (K1)
+# /voice off       NO TTS           NO TTS            NO TTS
+# /voice on        NO TTS           TTS (K1)          TTS (K1)
+# /voice tts       TTS (K2)         TTS (K1)          TTS (K1)
+#
+# K1 = base adapter auto-TTS (fires for VOICE when not disabled)
+# K2 = runner TTS (fires for "all" mode on any input)
+#
+# We test the CONTRACT: message_type + auto_tts_disabled state,
+# which determines whether K1/K2 fire.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestVoiceModeCombinationMatrix:
+    """Test all 12 combinations of voice mode x input type."""
+
+    # ── Helpers ──────────────────────────────────────────────────────
+
+    def _setup(self):
+        from fastapi.testclient import TestClient
+        adapter = _make_adapter()
+        captured = _wire_agent(adapter, "response")
+        client = TestClient(_make_app(adapter))
+        return adapter, captured, client
+
+    def _send_text(self, client, sid="m1"):
+        """Simulate text chat (sendMessage)."""
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            client.post("/v1/chat", json={"message": "hello", "session_id": sid},
+                        headers={"Authorization": "Bearer k"})
+
+    def _send_voice_ws(self, client, adapter, sid="m1"):
+        """Simulate push-to-talk or streaming (voice input via WS)."""
+        captured = []
+        async def handler(event):
+            captured.append(event)
+            sk = adapter._build_session_key(event.source.chat_id)
+            q = adapter._response_queues.get(sk)
+            if q:
+                await q.put({"type": "message", "content": "response"})
+                await q.put({"type": "done"})
+        adapter.handle_message = handler
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            with client.websocket_connect("/v1/chat/stream") as ws:
+                ws.send_json({"type": "auth", "token": "k", "session_id": sid})
+                ws.receive_json()
+                ws.send_json({"message": "voice transcript", "voice": True})
+                while ws.receive_json()["type"] != "done":
+                    pass
+        return captured
+
+    def _send_command(self, client, adapter, cmd, sid="m1"):
+        """Send /voice command via WS and wait for done."""
+        async def handler(event):
+            sk = adapter._build_session_key(event.source.chat_id)
+            q = adapter._response_queues.get(sk)
+            if q:
+                await q.put({"type": "message", "content": "ok"})
+                await q.put({"type": "done"})
+        adapter.handle_message = handler
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            with client.websocket_connect("/v1/chat/stream") as ws:
+                ws.send_json({"type": "auth", "token": "k", "session_id": sid})
+                ws.receive_json()
+                ws.send_json({"message": cmd})
+                while ws.receive_json()["type"] != "done":
+                    pass
+
+    # ── FRESH session (no /voice command sent) ───────────────────────
+
+    def test_fresh_text_should_be_TEXT_type(self):
+        """Fresh session + text input -> MessageType.TEXT, no TTS."""
+        adapter, captured, client = self._setup()
+        self._send_text(client)
+        assert captured["events"][0].message_type == MessageType.TEXT
+        # auto_tts_disabled is empty (fresh) but doesn't matter - K1 only fires for VOICE
+        # K2: voice_mode default "off" -> skip
+
+    def test_fresh_voice_should_be_VOICE_type_tts_enabled(self):
+        """Fresh session + voice input -> MessageType.VOICE, K1 fires (not disabled)."""
+        adapter, _, client = self._setup()
+        events = self._send_voice_ws(client, adapter)
+        assert events[0].message_type == MessageType.VOICE
+        # K1: VOICE + not disabled -> TTS fires
+        assert "m1" not in [adapter._build_session_key(c) for c in adapter._auto_tts_disabled_chats]
+
+    # ── /voice off ───────────────────────────────────────────────────
+
+    def test_off_text_should_have_no_tts(self):
+        """/voice off + text -> TEXT type, no TTS from either layer."""
+        adapter, _, client = self._setup()
+        # Simulate /voice off state (runner sets this)
+        adapter._auto_tts_disabled_chats.add("m1")
+        captured = _wire_agent(adapter, "response")
+        self._send_text(client)
+        assert captured["events"][0].message_type == MessageType.TEXT
+
+    def test_off_voice_should_be_VOICE_but_tts_disabled(self):
+        """/voice off + voice input -> VOICE type but auto_tts DISABLED.
+        K1 checks auto_tts_disabled -> skip. K2 checks voice_mode "off" -> skip."""
+        adapter, _, client = self._setup()
+        # Simulate /voice off state
+        adapter._auto_tts_disabled_chats.add("m1")
+        events = self._send_voice_ws(client, adapter)
+        assert events[0].message_type == MessageType.VOICE
+        # K1: VOICE but chat_id IS disabled -> no TTS
+        assert "m1" in adapter._auto_tts_disabled_chats
+
+    # ── /voice on (voice_only) ───────────────────────────────────────
+
+    def test_on_text_should_have_no_tts(self):
+        """/voice on + text -> TEXT type, no TTS (voice_only doesn't cover text)."""
+        adapter, _, client = self._setup()
+        self._send_command(client, adapter, "/voice on")
+        captured = _wire_agent(adapter, "response")
+        self._send_text(client)
+        assert captured["events"][0].message_type == MessageType.TEXT
+        # K1: not VOICE -> skip. K2: voice_only but not voice input -> skip
+
+    def test_on_voice_should_be_VOICE_tts_enabled(self):
+        """/voice on + voice input -> VOICE type, K1 fires (not disabled)."""
+        adapter, _, client = self._setup()
+        self._send_command(client, adapter, "/voice on")
+        events = self._send_voice_ws(client, adapter)
+        assert events[0].message_type == MessageType.VOICE
+        assert "m1" not in adapter._auto_tts_disabled_chats
+        # K1: VOICE + not disabled -> TTS fires
+
+    # ── /voice tts (all) ─────────────────────────────────────────────
+
+    def test_tts_text_should_be_TEXT_but_runner_tts_fires(self):
+        """/voice tts + text -> TEXT type, K2 fires (all mode covers text)."""
+        adapter, _, client = self._setup()
+        self._send_command(client, adapter, "/voice tts")
+        captured = _wire_agent(adapter, "response")
+        self._send_text(client)
+        assert captured["events"][0].message_type == MessageType.TEXT
+        # K1: not VOICE -> skip. K2: "all" mode -> TTS fires for text too
+
+    def test_tts_voice_should_be_VOICE_k1_fires(self):
+        """/voice tts + voice -> VOICE type, K1 fires, K2 dedup skips."""
+        adapter, _, client = self._setup()
+        self._send_command(client, adapter, "/voice tts")
+        events = self._send_voice_ws(client, adapter)
+        assert events[0].message_type == MessageType.VOICE
+        assert "m1" not in adapter._auto_tts_disabled_chats
+        # K1: VOICE + not disabled -> TTS. K2: dedup (voice input, K1 handled) -> skip
+
+    # ── Transitions ──────────────────────────────────────────────────
+
+    def test_off_then_on_should_reenable_tts(self):
+        """/voice off -> /voice on: TTS SHOULD be re-enabled for voice input.
+        Runner calls _set_adapter_auto_tts_disabled(disabled=False) on /voice on."""
+        adapter, _, client = self._setup()
+        # Simulate /voice off
+        adapter._auto_tts_disabled_chats.add("m1")
+        assert "m1" in adapter._auto_tts_disabled_chats
+        # Simulate /voice on (runner removes from disabled set)
+        adapter._auto_tts_disabled_chats.discard("m1")
+        assert "m1" not in adapter._auto_tts_disabled_chats
+
+    def test_tts_then_on_should_keep_voice_tts(self):
+        """/voice tts -> /voice on (streaming exit): voice input SHOULD still get TTS.
+        Neither /voice tts nor /voice on adds to disabled set."""
+        adapter, _, client = self._setup()
+        # /voice tts: disabled=False (not in set)
+        assert "m1" not in adapter._auto_tts_disabled_chats
+        # /voice on: disabled=False (still not in set)
+        assert "m1" not in adapter._auto_tts_disabled_chats
+        # Voice input should work
+        events = self._send_voice_ws(client, adapter)
+        assert events[0].message_type == MessageType.VOICE
