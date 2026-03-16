@@ -272,6 +272,70 @@ class TestVoiceContract:
 
         assert events[0].text == "what is the weather"
 
+    def test_transcribe_endpoint_should_return_transcript_only(self):
+        """POST /v1/transcribe SHOULD return transcript without sending to agent."""
+        from fastapi.testclient import TestClient
+        adapter = _make_adapter()
+        events = _wire_agent(adapter, "should not reach")
+        client = TestClient(_make_app(adapter))
+
+        fake_result = {"success": True, "transcript": "transcribe only test",
+                       "language": "en", "language_probability": 0.99}
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return fake_result
+
+        with patch.dict(os.environ, {"API_KEY": "k"}), \
+             patch("gateway.api_server.asyncio.to_thread", fake_to_thread):
+            resp = client.post("/v1/transcribe",
+                               files={"file": ("v.webm", b"audio", "audio/webm")},
+                               headers={"Authorization": "Bearer k"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["transcript"] == "transcribe only test"
+        assert data["language"] == "en"
+        # Agent should NOT have been called
+        assert len(events) == 0
+
+    def test_ws_voice_flag_should_set_message_type_voice(self):
+        """WS message with voice:true SHOULD set MessageType.VOICE for auto-TTS."""
+        from fastapi.testclient import TestClient
+        adapter = _make_adapter()
+        events = _wire_agent(adapter, "voice ws reply")
+        client = TestClient(_make_app(adapter))
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            with client.websocket_connect("/v1/chat/stream") as ws:
+                ws.send_json({"type": "auth", "token": "k", "session_id": "vws1"})
+                ws.receive_json()  # auth_ok
+
+                ws.send_json({"message": "hello from voice", "voice": True})
+                while ws.receive_json()["type"] != "done":
+                    pass
+
+        assert len(events) == 1
+        assert events[0].message_type == MessageType.VOICE
+        assert events[0].text == "hello from voice"
+
+    def test_ws_without_voice_flag_should_be_text(self):
+        """WS message without voice flag SHOULD remain MessageType.TEXT."""
+        from fastapi.testclient import TestClient
+        adapter = _make_adapter()
+        events = _wire_agent(adapter, "text reply")
+        client = TestClient(_make_app(adapter))
+
+        with patch.dict(os.environ, {"API_KEY": "k"}):
+            with client.websocket_connect("/v1/chat/stream") as ws:
+                ws.send_json({"type": "auth", "token": "k"})
+                ws.receive_json()
+
+                ws.send_json({"message": "just text"})
+                while ws.receive_json()["type"] != "done":
+                    pass
+
+        assert events[0].message_type == MessageType.TEXT
+
     def test_voice_transcription_failure_should_return_422(self):
         from fastapi.testclient import TestClient
         adapter = _make_adapter()

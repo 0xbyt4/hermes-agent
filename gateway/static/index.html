@@ -868,17 +868,32 @@ async function sendVoice(blob) {
     showTyping();
     if (voiceMode) setAvatarState('thinking');
     try {
+        // Step 1: Upload and transcribe only
         const ext = blob.type.includes('webm') ? '.webm' : '.ogg';
         const form = new FormData();
         form.append('file', blob, `voice${ext}`);
-        form.append('session_id', sessionId);
-        const resp = await fetch(`${API_BASE}/v1/chat/voice`, {
+        const transcribeResp = await fetch(`${API_BASE}/v1/transcribe`, {
             method: 'POST', headers: { 'Authorization': `Bearer ${apiKey}` }, body: form,
         });
-        hideTyping();
-        if (!resp.ok) { addSystemMessage('Voice processing failed'); if (voiceMode) { setAvatarState('listening'); startRecording(); } return; }
-        const data = await resp.json();
-        handleResponse(data);
+        if (!transcribeResp.ok) { hideTyping(); addSystemMessage('Voice processing failed'); if (voiceMode) { setAvatarState('listening'); startRecording(); } return; }
+        const { transcript } = await transcribeResp.json();
+
+        // Step 2: Send transcript via WS with voice flag for streaming response
+        if (_ws && _ws.readyState === WebSocket.OPEN) {
+            _ws.send(JSON.stringify({ message: transcript, voice: true }));
+            // Response will stream via WS onmessage handler
+        } else {
+            // HTTP fallback: use original voice endpoint
+            const form2 = new FormData();
+            form2.append('file', blob, `voice${ext}`);
+            form2.append('session_id', sessionId);
+            const resp = await fetch(`${API_BASE}/v1/chat/voice`, {
+                method: 'POST', headers: { 'Authorization': `Bearer ${apiKey}` }, body: form2,
+            });
+            hideTyping();
+            if (!resp.ok) { addSystemMessage('Voice processing failed'); if (voiceMode) { setAvatarState('listening'); startRecording(); } return; }
+            handleResponse(await resp.json());
+        }
     } catch (e) {
         hideTyping();
         addSystemMessage('Voice request failed');

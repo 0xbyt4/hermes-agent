@@ -276,13 +276,17 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
                     await ws.send_json({"type": "error", "content": "Rate limited. Please slow down."})
                     continue
 
+                # Voice flag: WS message can include "voice": true for MessageType.VOICE
+                is_voice = data.get("voice", False)
+                msg_type = MessageType.VOICE if is_voice else MessageType.TEXT
+
                 try:
                     queue = adapter.register_queue(session_id)
                 except ValueError:
                     await ws.send_json({"type": "error", "content": "Session is busy. Wait for the previous response."})
                     continue
                 try:
-                    await adapter.handle_request(session_id, message)
+                    await adapter.handle_request(session_id, message, message_type=msg_type)
 
                     while True:
                         msg = await asyncio.wait_for(queue.get(), timeout=RESPONSE_TIMEOUT)
@@ -414,6 +418,50 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
         # Send transcript to agent as voice message
         sid = session_id or str(uuid4())
         return await _collect_response(sid, transcript, message_type=MessageType.VOICE)
+
+    # ── Transcribe only (for WS streaming voice flow) ──────────────
+
+    @app.post("/v1/transcribe")
+    async def transcribe_only(
+        file: UploadFile = File(...),
+        _: None = Depends(verify_api_key),
+    ) -> Dict[str, Any]:
+        """Upload audio and return the transcript without sending to agent.
+
+        Use this with WebSocket streaming: transcribe first, then send the
+        transcript via WS with ``"voice": true`` to get a streamed response.
+        """
+        if not _rate_limiter.check("voice"):
+            raise HTTPException(429, "Rate limited. Please slow down.")
+        data = await _read_upload_safe(file, _MAX_UPLOAD_BYTES)
+
+        suffix = _safe_suffix(file.filename, ".webm")
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, prefix="api_stt_", delete=False)
+        tmp.write(data)
+        tmp.close()
+
+        try:
+            from tools.transcription_tools import transcribe_audio, get_stt_model_from_config
+            stt_model = get_stt_model_from_config()
+            result = await asyncio.to_thread(transcribe_audio, tmp.name, model=stt_model)
+
+            if not result.get("success"):
+                raise HTTPException(422, "Transcription failed. Check server logs.")
+
+            transcript = result.get("transcript", "").strip()
+            if not transcript:
+                raise HTTPException(422, "Could not transcribe audio (empty result)")
+
+            return {
+                "transcript": transcript,
+                "language": result.get("language", "unknown"),
+                "language_probability": result.get("language_probability", 0.0),
+            }
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
 
     # ── Sessions ─────────────────────────────────────────────────────
 
