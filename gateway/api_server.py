@@ -131,7 +131,7 @@ class ChatResponse(BaseModel):
 
 def create_app(adapter: APIPlatformAdapter) -> FastAPI:
     """Build and return the FastAPI application wired to *adapter*."""
-    app = FastAPI(title="Hermes Agent API", version="1.0.0")
+    app = FastAPI(title="Hermes Agent API", version="1.0.0", docs_url=None, redoc_url=None, openapi_url=None)
 
     # CORS — allow same-origin by default, configurable via env
     cors_origins = os.getenv("API_CORS_ORIGINS", "").strip()
@@ -348,9 +348,11 @@ def create_app(adapter: APIPlatformAdapter) -> FastAPI:
         dest.write_bytes(data)
 
         url = adapter._register_media(str(dest))
+        # Sanitize filename for safe display (strip path components)
+        safe_name = Path(file.filename).name if file.filename else "upload"
         return {
             "url": url,
-            "filename": file.filename,
+            "filename": safe_name,
             "size": len(data),
             "content_type": file.content_type,
         }

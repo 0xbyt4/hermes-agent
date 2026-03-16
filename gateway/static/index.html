@@ -626,38 +626,42 @@ function updateAvatarStatus() {
 
 // ── Streaming voice mode (long press, always voice all) ──────────
 
-function enterVoiceMode() {
+async function enterVoiceMode() {
     voiceMode = true;
     document.getElementById('voice-btn').classList.add('voice-mode');
     document.getElementById('input-bar').classList.add('voice-mode-active');
     showAvatar('listening');
-    // Tell backend to enable TTS for all replies
-    sendCommand('/voice tts');
+    // Wait for backend to enable TTS before starting recording (prevents queue race)
+    await sendCommand('/voice tts');
     startRecording();
 }
 
-function exitVoiceMode() {
+async function exitVoiceMode() {
     voiceMode = false;
     document.getElementById('voice-btn').classList.remove('voice-mode');
     document.getElementById('input-bar').classList.remove('voice-mode-active');
     if (currentTtsAudio) { currentTtsAudio.pause(); currentTtsAudio = null; }
     stopRecording();
     hideAvatar();
-    // Switch to voice_only so push-to-talk still gets TTS
-    sendCommand('/voice on');
     addSystemMessage('Streaming mode off');
+    // Switch to voice_only so push-to-talk still gets TTS
+    await sendCommand('/voice on');
 }
 
-function sendCommand(cmd) {
-    fetch(`${API_BASE}/v1/chat`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: cmd, session_id: sessionId }),
-    }).catch(() => {});
+async function sendCommand(cmd) {
+    try {
+        const resp = await fetch(`${API_BASE}/v1/chat`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: cmd, session_id: sessionId }),
+        });
+        await resp.json(); // consume response body
+    } catch (e) {}
 }
 
 async function startRecording() {
     if (isRecording || currentTtsAudio) return;
+    isRecording = true; // Set early to prevent async race before getUserMedia resolves
     try {
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
@@ -685,11 +689,12 @@ async function startRecording() {
                 if (voiceMode) setTimeout(startRecording, 200);
                 return;
             }
+            // Don't send partial recording if voice mode was just exited
+            if (!voiceMode) return;
             const blob = new Blob(audioChunks, {type: mediaRecorder.mimeType});
             await sendVoice(blob);
         };
         mediaRecorder.start();
-        isRecording = true;
         document.getElementById('voice-btn').classList.add('recording');
 
         // VAD: detect silence to auto-stop
@@ -714,6 +719,7 @@ async function startRecording() {
         }
         setTimeout(checkVAD, 50);
     } catch (err) {
+        isRecording = false; // Reset early guard on failure
         addSystemMessage('Microphone access denied');
         if (voiceMode) exitVoiceMode();
     }
