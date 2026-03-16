@@ -48,25 +48,27 @@ def cognitive_memory_tool(
         }, ensure_ascii=False)
 
     if action == "recall":
-        return _handle_recall(engine, query, scope, categories, limit)
+        result = _handle_recall(engine, query, scope, categories, limit)
     elif action == "store":
         result = _handle_store(engine, store, content, scope, importance, categories)
-        # Trigger forgetting cycle if due
-        if forgetting:
-            try:
-                forgetting.maybe_run_cycle()
-            except Exception as e:
-                logger.debug("Forgetting cycle failed (non-fatal): %s", e)
-        return result
     elif action == "forget":
-        return _handle_forget(store, query, scope)
+        result = _handle_forget(store, query, scope)
     elif action == "status":
-        return _handle_status(store)
+        result = _handle_status(store)
     else:
         return json.dumps({
             "success": False,
             "error": f"Unknown action '{action}'. Use: recall, store, forget, status",
         }, ensure_ascii=False)
+
+    # Trigger forgetting cycle after any successful action (if due)
+    if forgetting:
+        try:
+            forgetting.maybe_run_cycle(exempt_scopes=["/user"])
+        except Exception as e:
+            logger.debug("Forgetting cycle failed (non-fatal): %s", e)
+
+    return result
 
 
 def _handle_recall(
@@ -143,10 +145,23 @@ def _handle_store(
 
     # Step 2: Encode with candidates so contradiction detection actually works
     encoding = encode(content, candidates=candidates if candidates else None)
+
+    # Step 3: Dedup — skip if near-identical memory exists AND no contradiction detected
+    if not encoding.contradictions:
+        for sm in candidates:
+            if sm.similarity >= 0.95:
+                return json.dumps({
+                    "success": True,
+                    "action": "store",
+                    "memory_id": sm.memory.id,
+                    "duplicate": True,
+                    "existing_content": sm.memory.content[:100],
+                    "similarity": round(sm.similarity, 3),
+                }, ensure_ascii=False)
     final_categories = categories or encoding.categories
     final_importance = importance if importance is not None else encoding.importance
 
-    # Step 3: Store the memory
+    # Step 4: Store the memory
     memory_id = store.add_memory(
         content=content,
         embedding=embedding,
@@ -155,7 +170,7 @@ def _handle_store(
         categories=final_categories,
     )
 
-    # Step 4: Supersede contradicted memories
+    # Step 5: Supersede contradicted memories
     superseded = []
     for c in encoding.contradictions:
         if c.existing_memory:

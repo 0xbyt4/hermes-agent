@@ -362,7 +362,6 @@ class TestForgettingCycleTrigger:
             store.add_memory(f"memory-{i}", importance=0.8)
 
         forgetting = ForgettingManager(store=store)
-        # Ensure cycle hasn't run yet
         assert forgetting._last_cycle_run is None
 
         result = cognitive_memory_tool(
@@ -374,11 +373,10 @@ class TestForgettingCycleTrigger:
         )
         parsed = json.loads(result)
         assert parsed["success"] is True
-        # Cycle should have been triggered
         assert forgetting._last_cycle_run is not None
 
-    def test_recall_does_not_trigger_forgetting(self, store, engine):
-        """Recall action should NOT trigger forgetting cycle."""
+    def test_recall_also_triggers_forgetting_cycle(self, store, engine):
+        """Recall action should also trigger forgetting cycle when due."""
         from cognitive_memory.extraction import ForgettingManager
 
         emb = [1.0, 0.0, 0.0]
@@ -394,12 +392,87 @@ class TestForgettingCycleTrigger:
             store=store,
             forgetting=forgetting,
         )
-        assert forgetting._last_cycle_run is None
+        assert forgetting._last_cycle_run is not None
+
+    def test_forgetting_cycle_exempts_user_scope(self, store, engine):
+        """User scope memories should not decay during forgetting cycle."""
+        import time as _time
+        from cognitive_memory.extraction import ForgettingManager
+
+        # Add user memory with old access time
+        mid = store.add_memory("User's name is Gani", importance=0.8, scope="/user")
+        conn = store._get_conn()
+        old_time = _time.time() - (90 * 86400)  # 90 days ago
+        conn.execute(
+            "UPDATE cognitive_memories SET last_accessed = ? WHERE id = ?",
+            (old_time, mid),
+        )
+        conn.commit()
+
+        # Add enough non-user memories for cycle to run
+        for i in range(5):
+            store.add_memory(f"project-fact-{i}", importance=0.8, scope="/project")
+
+        forgetting = ForgettingManager(store=store)
+
+        cognitive_memory_tool(
+            action="store",
+            content="The server runs on port 3000",
+            engine=engine,
+            store=store,
+            forgetting=forgetting,
+        )
+
+        # User memory should still have original importance (exempt from decay)
+        user_mem = store.get_memory(mid)
+        assert user_mem.importance == pytest.approx(0.8)
+        assert user_mem.forgotten is False
 
 
 # ---------------------------------------------------------------------------
 # Scope wildcard safety
 # ---------------------------------------------------------------------------
+
+
+class TestDeduplication:
+    def test_duplicate_content_not_stored_twice(self, store, engine):
+        """Near-identical content should be detected and skipped."""
+        emb = [1.0, 0.0, 0.0]
+        store.add_memory(
+            "User prefers dark mode",
+            embedding=emb,
+            importance=0.7,
+            categories=["preference"],
+        )
+
+        result = _call(
+            "store", engine=engine, store=store,
+            content="User prefers dark mode",
+        )
+        assert result["success"] is True
+        assert result.get("duplicate") is True
+        # Should not create a new memory
+        assert store.count() == 1
+
+    def test_similar_but_different_content_stored(self, store, engine):
+        """Content that is similar but meaningfully different should be stored."""
+        store.add_memory(
+            "User prefers dark mode",
+            embedding=[1.0, 0.0, 0.0],
+            importance=0.7,
+        )
+
+        # Use a different embedding for meaningfully different content
+        diff_embedder = _make_embedder(default_embedding=[0.7, 0.7, 0.0])
+        diff_engine = RecallEngine(store=store, embedder=diff_embedder)
+
+        result = _call(
+            "store", engine=diff_engine, store=store,
+            content="User prefers light mode in the morning",
+        )
+        assert result["success"] is True
+        assert result.get("duplicate") is not True
+        assert store.count() == 2
 
 
 class TestScopeWildcard:
