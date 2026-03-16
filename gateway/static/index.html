@@ -324,6 +324,13 @@ function connectWebSocket() {
             return;
         }
 
+        // Intercept command responses (sendCommand waiting for done)
+        if (_commandResolve) {
+            if (msg.type === 'done') { const r = _commandResolve; _commandResolve = null; r(); }
+            // Discard command's text response, pass errors through
+            if (msg.type === 'message') return;
+        }
+
         if (msg.type === 'message') {
             hideTyping();
             _streamingText += msg.content;
@@ -386,6 +393,10 @@ function connectWebSocket() {
 
     _ws.onclose = () => {
         document.getElementById('status-dot').style.background = '#ef4444';
+        // Clean up partial streaming state
+        if (_streamingDiv) { _streamingDiv = null; _streamingText = ''; _streamingMedia = []; }
+        if (_commandResolve) { const r = _commandResolve; _commandResolve = null; r(); }
+        hideTyping();
         // Auto-reconnect after 3 seconds
         clearTimeout(_wsReconnectTimer);
         _wsReconnectTimer = setTimeout(() => { if (apiKey) connectWebSocket(); }, 3000);
@@ -764,18 +775,15 @@ async function exitVoiceMode() {
     await sendCommand('/voice on');
 }
 
+let _commandResolve = null; // pending sendCommand promise resolver
+
 async function sendCommand(cmd) {
     if (_ws && _ws.readyState === WebSocket.OPEN) {
-        // Send via WS and wait for done signal
         return new Promise((resolve) => {
-            const origHandler = _ws.onmessage;
-            _ws.onmessage = (e) => {
-                const msg = JSON.parse(e.data);
-                if (msg.type === 'done') { _ws.onmessage = origHandler; resolve(); return; }
-                if (msg.type === 'message') return; // discard command response text
-                if (origHandler) origHandler(e);
-            };
+            _commandResolve = resolve;
             _ws.send(JSON.stringify({ message: cmd }));
+            // Timeout: don't wait forever if done never arrives
+            setTimeout(() => { if (_commandResolve === resolve) { _commandResolve = null; resolve(); } }, 10000);
         });
     }
     // HTTP fallback

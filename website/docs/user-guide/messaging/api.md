@@ -228,6 +228,12 @@ Real-time streaming over WebSocket. The agent sends response chunks as they're g
 {"message": "Explain quantum computing"}
 ```
 
+To mark a message as voice input (triggers auto-TTS in the response), add the `voice` flag:
+
+```json
+{"message": "What is the weather?", "voice": true}
+```
+
 **Step 4 — Receive streamed response chunks:**
 
 ```json
@@ -278,6 +284,32 @@ curl -X POST http://localhost:8766/v1/chat/voice \
 |-------|------|----------|-------------|
 | `file` | file | Yes | Audio file (webm, ogg, mp3, wav) |
 | `session_id` | string | No | Session ID for conversation continuity |
+
+### Transcribe Only
+
+```
+POST /v1/transcribe
+```
+
+Upload audio and get the transcript back without sending it to the agent. Use this with WebSocket streaming: transcribe first, then send the transcript via WebSocket with `"voice": true` to get a streamed response.
+
+```bash
+curl -X POST http://localhost:8766/v1/transcribe \
+  -H "Authorization: Bearer your-secret-api-key" \
+  -F "file=@recording.webm"
+```
+
+**Response:**
+
+```json
+{
+  "transcript": "What is the weather like today?",
+  "language": "en",
+  "language_probability": 0.95
+}
+```
+
+This is the recommended approach for the Web UI: transcribe via HTTP (for file upload), then send the transcript over WebSocket for real-time streaming of the agent's response.
 
 ### File Upload
 
