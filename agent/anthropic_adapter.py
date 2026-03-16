@@ -40,9 +40,12 @@ def _supports_adaptive_thinking(model: str) -> bool:
 
 
 # Beta headers for enhanced features (sent with ALL auth types)
+# NOTE: fine-grained-tool-streaming-2025-05-14 was removed because it is
+# incompatible with OAuth tokens — Anthropic returns 500 when this header
+# is present on OAuth-authenticated requests.  Hermes uses non-streaming
+# messages.create() so this beta was not needed anyway.
 _COMMON_BETAS = [
     "interleaved-thinking-2025-05-14",
-    "fine-grained-tool-streaming-2025-05-14",
 ]
 
 # Additional beta headers required for OAuth/subscription auth
