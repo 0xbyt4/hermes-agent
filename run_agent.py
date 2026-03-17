@@ -3432,6 +3432,15 @@ class AIAgent:
                     # Safe to fall back to the standard non-streaming path.
                     logger.info("Streaming failed before delivery, falling back to non-streaming: %s", e)
                     try:
+                        from agent.audit import get_audit_logger, EVENT_FALLBACK
+                        get_audit_logger().log_session_event(
+                            event_type=EVENT_FALLBACK,
+                            session_id=self.session_id,
+                            context={"reason": "streaming_fallback", "error": str(e)[:200]},
+                        )
+                    except Exception:
+                        pass
+                    try:
                         result["response"] = self._interruptible_api_call(api_kwargs)
                     except Exception as fallback_err:
                         result["error"] = fallback_err

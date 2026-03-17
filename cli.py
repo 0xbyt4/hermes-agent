@@ -1175,6 +1175,18 @@ class HermesCLI:
             short_uuid = uuid.uuid4().hex[:6]
             self.session_id = f"{timestamp_str}_{short_uuid}"
         
+        # Audit log: CLI session start
+        try:
+            from agent.audit import get_audit_logger, EVENT_SESSION_START
+            get_audit_logger().log_session_event(
+                event_type=EVENT_SESSION_START,
+                session_id=self.session_id,
+                platform="cli",
+                model=self.model,
+            )
+        except Exception:
+            pass
+
         # History file for persistent input recall across sessions
         self._history_file = _hermes_home / ".hermes_history"
         self._last_invalidate: float = 0.0  # throttle UI repaints

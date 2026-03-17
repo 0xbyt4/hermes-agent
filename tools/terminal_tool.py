@@ -149,9 +149,11 @@ def _check_all_guards(command: str, env_type: str) -> dict:
     result = _check_all_guards_impl(command, env_type,
                                     approval_callback=_approval_callback)
 
-    # Audit log: record approval decision
+    # Audit log: record approval decisions for dangerous commands
+    # Only log when the approval system was actually consulted (dangerous
+    # pattern detected). Safe commands that pass without check are not logged.
     try:
-        from agent.audit import get_audit_logger, EVENT_APPROVAL_RESULT
+        from agent.audit import get_audit_logger, EVENT_APPROVAL_REQUEST, EVENT_APPROVAL_RESULT
         if not result["approved"]:
             get_audit_logger().log_security_event(
                 event_type=EVENT_APPROVAL_RESULT,
@@ -164,7 +166,8 @@ def _check_all_guards(command: str, env_type: str) -> dict:
                     "smart_denied": result.get("smart_denied", False),
                 },
             )
-        elif result.get("smart_approved"):
+        elif result.get("smart_approved") or result.get("pattern_key") or result.get("description"):
+            # Command was flagged but approved (smart, once, session, always)
             get_audit_logger().log_security_event(
                 event_type=EVENT_APPROVAL_RESULT,
                 severity="info",
@@ -172,7 +175,7 @@ def _check_all_guards(command: str, env_type: str) -> dict:
                     "command": command[:200],
                     "env_type": env_type,
                     "approved": True,
-                    "smart_approved": True,
+                    "smart_approved": result.get("smart_approved", False),
                 },
             )
     except Exception:
