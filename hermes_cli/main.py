@@ -2361,6 +2361,12 @@ def cmd_audit(args):
         print(f"  Tool calls:    {summary['tool_calls']:,}")
         print(f"  API calls:     {summary['api_calls']:,}")
         print(f"  API errors:    {summary['api_errors']:,}")
+        if summary.get("total_input_tokens") or summary.get("total_output_tokens"):
+            inp = summary.get("total_input_tokens", 0)
+            out = summary.get("total_output_tokens", 0)
+            print(f"  Tokens:        {inp + out:,} ({inp:,} in / {out:,} out)")
+        if summary.get("total_cost_usd"):
+            print(f"  Est. cost:     ${summary['total_cost_usd']:.4f}")
 
         if summary.get("top_errors"):
             print(f"\n  Top Errors:")
@@ -2396,7 +2402,21 @@ def cmd_audit(args):
         if getattr(args, "type", None):
             kwargs["event_type"] = args.type
         if getattr(args, "session", None):
-            kwargs["session_id"] = args.session
+            session_val = args.session
+            # Try resolving as session title if it doesn't look like an ID
+            if not session_val.startswith("20") and "_" not in session_val:
+                try:
+                    from hermes_state import SessionDB
+                    _sdb_path = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))) / "state.db"
+                    if _sdb_path.exists():
+                        _sdb = SessionDB(str(_sdb_path))
+                        matches = _sdb.search_sessions(session_val, limit=1)
+                        if matches:
+                            session_val = matches[0]["id"]
+                        _sdb.close()
+                except Exception:
+                    pass
+            kwargs["session_id"] = session_val
         if getattr(args, "tool", None):
             kwargs["tool_name"] = args.tool
         if getattr(args, "severity", None):
@@ -3830,7 +3850,7 @@ For more help on a command:
 
     audit_list = audit_subparsers.add_parser("list", help="List audit events")
     audit_list.add_argument("--type", help="Filter by event type (tool_call, api_error, etc.)")
-    audit_list.add_argument("--session", help="Filter by session ID")
+    audit_list.add_argument("--session", help="Filter by session ID or title (partial match)")
     audit_list.add_argument("--search", help="Full-text search across errors, tools, context")
     audit_list.add_argument("--tool", help="Filter by tool name")
     audit_list.add_argument("--severity", help="Filter by severity (info, warning, error, critical)")

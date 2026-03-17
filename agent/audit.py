@@ -388,6 +388,32 @@ class AuditLogger:
                     (since,)
                 ).fetchall()
 
+                # Total estimated cost from API call context
+                cost_rows = cur(
+                    "SELECT context FROM events WHERE timestamp > ? "
+                    "AND event_type = 'api_call' AND context IS NOT NULL",
+                    (since,)
+                ).fetchall()
+                total_cost = 0.0
+                for (ctx_str,) in cost_rows:
+                    try:
+                        ctx = json.loads(ctx_str)
+                        c = ctx.get("cost_usd")
+                        if c:
+                            total_cost += float(c)
+                    except Exception:
+                        pass
+
+                # Total tokens
+                total_input = cur(
+                    "SELECT COALESCE(SUM(input_tokens), 0) FROM events WHERE timestamp > ? AND event_type = 'api_call'",
+                    (since,)
+                ).fetchone()[0]
+                total_output = cur(
+                    "SELECT COALESCE(SUM(output_tokens), 0) FROM events WHERE timestamp > ? AND event_type = 'api_call'",
+                    (since,)
+                ).fetchone()[0]
+
             return {
                 "period_hours": last_hours,
                 "total_events": total,
@@ -404,6 +430,9 @@ class AuditLogger:
                     {"name": t[0], "calls": t[1], "avg_ms": round(t[2], 1) if t[2] else None}
                     for t in top_tools
                 ],
+                "total_cost_usd": round(total_cost, 4) if total_cost else 0,
+                "total_input_tokens": total_input,
+                "total_output_tokens": total_output,
             }
         except Exception as e:
             logger.debug("Audit summary failed: %s", e)
