@@ -81,7 +81,10 @@ hermes audit list --severity warning       # by severity level
 hermes audit list --hours 2 --limit 20    # time window + limit
 hermes audit list --session <id>           # by session ID or title
 hermes audit list --search "rate limit"    # full-text search
+hermes audit list --type api_call --hours 1 --limit 5  # combined filters
 ```
+
+**6 subcommands, 13 flags** — all combinable for precise filtering.
 
 ### Event Types
 
