@@ -1,0 +1,175 @@
+---
+sidebar_position: 25
+title: "Audit Log"
+description: "Structured event log for tool calls, API calls, errors, and security events"
+---
+
+# Audit Log
+
+Hermes Agent records every significant action — tool calls, API requests, errors, session lifecycle, security decisions — in a structured, queryable audit log. This makes it possible to answer "what happened?" after the fact, detect recurring problems, and track usage across platforms.
+
+## How It Works
+
+Every agent action is captured as an event in `~/.hermes/audit.db` (SQLite). The audit system is:
+
+- **Append-only** — events are never modified, only added
+- **Zero-impact** — all writes are wrapped in try/except, never blocks the agent
+- **Thread-safe** — WAL mode with locking for concurrent access
+- **Auto-pruned** — events older than 90 days are cleaned up on startup
+
+## Event Types
+
+| Event | What It Captures |
+|-------|-----------------|
+| `tool_call` | Tool name, arguments, result preview, duration, success/failure |
+| `tool_error` | Tool failures with error type and message |
+| `api_call` | Model, provider, status code, tokens, duration, cost |
+| `api_error` | API failures with status code, error type, retry count |
+| `session_start` | Session begin with user, platform, model |
+| `session_end` | Session end with completion status, cost |
+| `auth_refresh` | Credential refresh success |
+| `auth_failure` | Credential refresh failure with reason |
+| `compression` | Context compression with before/after message counts |
+| `fallback_activated` | Model fallback with old/new model info |
+| `approval_result` | Dangerous command approval decisions (allow/deny) |
+| `config_change` | Configuration changes via `hermes config set` |
+| `gateway_startup` | Gateway start with connected platforms |
+| `gateway_shutdown` | Gateway stop |
+| `skill_install` | Skill installation events |
+| `pairing_approved` | User pairing approval for platform access |
+
+## CLI Commands
+
+### Summary
+
+Show a high-level overview of recent activity:
+
+```bash
+hermes audit                    # default: last 24 hours
+hermes audit summary --hours 4  # last 4 hours
+```
+
+Output:
+```
+  Audit Summary (last 24h)
+  ========================================
+  Total events:  156
+  Errors:        18 (11.5%)
+  Tool calls:    22
+  API calls:     48
+  API errors:    18
+  Tokens:        3,001 new (108 in / 2,893 out)
+  Cache:         1,093,664 (861,043 read / 232,621 write)
+
+  Tool Usage:
+      14x  search_files (587ms avg)
+       5x  todo
+       2x  read_file (875ms avg)
+```
+
+### List Events
+
+Browse and filter events:
+
+```bash
+hermes audit list                          # last 50 events
+hermes audit list --type api_error         # only API errors
+hermes audit list --type tool_call         # only tool calls
+hermes audit list --tool terminal          # calls to a specific tool
+hermes audit list --errors                 # all errors
+hermes audit list --severity warning       # by severity level
+hermes audit list --hours 2 --limit 20    # time window + limit
+hermes audit list --session <id>           # by session ID or title
+hermes audit list --search "rate limit"    # full-text search
+```
+
+### Event Types
+
+List all event types with counts:
+
+```bash
+hermes audit types
+```
+
+### Problems
+
+Automatically detect patterns that indicate issues:
+
+```bash
+hermes audit problems              # last 24 hours
+hermes audit problems --hours 1    # last hour
+```
+
+Detects:
+- Repeated API errors (same error 3+ times)
+- High API error rate (>25%)
+- Rate limiting (429 responses)
+- Authentication failures (401 responses)
+- Slow tools (average >10s)
+- Repeated tool failures
+
+### Export
+
+Export events as JSONL for external analysis:
+
+```bash
+hermes audit export                          # to stdout
+hermes audit export --hours 48 -o audit.jsonl  # to file
+```
+
+### Prune
+
+Delete old events to manage disk space:
+
+```bash
+hermes audit prune                       # delete events older than 90 days (asks confirmation)
+hermes audit prune --older-than 30       # delete events older than 30 days
+hermes audit prune --older-than 7 --yes  # skip confirmation
+```
+
+## Configuration
+
+In `config.yaml`:
+
+```yaml
+audit:
+  enabled: true   # set to false to disable audit logging entirely
+```
+
+When disabled, a no-op logger is used — zero overhead, no events written.
+
+## Storage
+
+- **Location:** `~/.hermes/audit.db`
+- **Format:** SQLite with WAL mode
+- **Auto-prune:** Events older than 90 days are deleted on startup
+- **Full-text search:** FTS5 index on error messages, tool names, and context
+
+## Use Cases
+
+**Debugging user issues:**
+```bash
+hermes audit problems --hours 1
+# → "InternalServerError (HTTP 500) occurred 5 times"
+# → "API error rate 5/8 (62%)"
+```
+
+**Tracking costs:**
+```bash
+hermes audit summary --hours 24
+# → "Tokens: 3,001 new (108 in / 2,893 out)"
+# → "Cache: 1,093,664 (861,043 read / 232,621 write)"
+```
+
+**Security review:**
+```bash
+hermes audit list --type approval_result
+hermes audit list --type auth_failure
+hermes audit list --type pairing_approved
+```
+
+**Finding slow tools:**
+```bash
+hermes audit summary
+# → "Tool Usage: 14x search_files (587ms avg)"
+```
