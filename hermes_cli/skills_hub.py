@@ -416,6 +416,16 @@ def do_install(identifier: str, category: str = "", force: bool = False,
     c.print(f"[bold green]Installed:[/] {install_dir.relative_to(SKILLS_DIR)}")
     c.print(f"[dim]Files: {', '.join(bundle.files.keys())}[/]\n")
 
+    try:
+        from agent.audit import get_audit_logger
+        get_audit_logger().log_security_event(
+            event_type="skill_install",
+            severity="info",
+            context={"skill": bundle.name, "category": category},
+        )
+    except Exception:
+        pass
+
 
 def do_inspect(identifier: str, console: Optional[Console] = None) -> None:
     """Preview a skill's SKILL.md content without installing."""

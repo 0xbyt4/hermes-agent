@@ -4354,6 +4354,9 @@ class AIAgent:
             assistant_message, messages, effective_task_id, api_call_count
         )
 
+    # Tools handled inline (not via model_tools.py) — need separate audit logging
+    _INLINE_TOOLS = {"todo", "session_search", "memory", "clarify", "delegate_task"}
+
     def _invoke_tool(self, function_name: str, function_args: dict, effective_task_id: str) -> str:
         """Invoke a single tool and return the result string. No display logic.
 
@@ -4361,62 +4364,94 @@ class AIAgent:
         tools. Used by the concurrent execution path; the sequential path retains
         its own inline invocation for backward-compatible display handling.
         """
-        if function_name == "todo":
-            from tools.todo_tool import todo_tool as _todo_tool
-            return _todo_tool(
-                todos=function_args.get("todos"),
-                merge=function_args.get("merge", False),
-                store=self._todo_store,
-            )
-        elif function_name == "session_search":
-            if not self._session_db:
-                return json.dumps({"success": False, "error": "Session database not available."})
-            from tools.session_search_tool import session_search as _session_search
-            return _session_search(
-                query=function_args.get("query", ""),
-                role_filter=function_args.get("role_filter"),
-                limit=function_args.get("limit", 3),
-                db=self._session_db,
-                current_session_id=self.session_id,
-            )
-        elif function_name == "memory":
-            target = function_args.get("target", "memory")
-            from tools.memory_tool import memory_tool as _memory_tool
-            result = _memory_tool(
-                action=function_args.get("action"),
-                target=target,
-                content=function_args.get("content"),
-                old_text=function_args.get("old_text"),
-                store=self._memory_store,
-            )
-            # Also send user observations to Honcho when active
-            if self._honcho and target == "user" and function_args.get("action") == "add":
-                self._honcho_save_user_observation(function_args.get("content", ""))
-            return result
-        elif function_name == "clarify":
-            from tools.clarify_tool import clarify_tool as _clarify_tool
-            return _clarify_tool(
-                question=function_args.get("question", ""),
-                choices=function_args.get("choices"),
-                callback=self.clarify_callback,
-            )
-        elif function_name == "delegate_task":
-            from tools.delegate_tool import delegate_task as _delegate_task
-            return _delegate_task(
-                goal=function_args.get("goal"),
-                context=function_args.get("context"),
-                toolsets=function_args.get("toolsets"),
-                tasks=function_args.get("tasks"),
-                max_iterations=function_args.get("max_iterations"),
-                parent_agent=self,
-            )
-        else:
+        _is_inline = function_name in self._INLINE_TOOLS
+        if not _is_inline:
+            # Registry-dispatched tools — already audited in model_tools.py
             return handle_function_call(
                 function_name, function_args, effective_task_id,
                 enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
                 honcho_manager=self._honcho,
                 honcho_session_key=self._honcho_session_key,
             )
+
+        # Inline tools (bypass model_tools.py) — audit them here
+        _tool_start = time.time()
+        try:
+            if function_name == "todo":
+                from tools.todo_tool import todo_tool as _todo_tool
+                result = _todo_tool(
+                    todos=function_args.get("todos"),
+                    merge=function_args.get("merge", False),
+                    store=self._todo_store,
+                )
+            elif function_name == "session_search":
+                if not self._session_db:
+                    result = json.dumps({"success": False, "error": "Session database not available."})
+                else:
+                    from tools.session_search_tool import session_search as _session_search
+                    result = _session_search(
+                        query=function_args.get("query", ""),
+                        role_filter=function_args.get("role_filter"),
+                        limit=function_args.get("limit", 3),
+                        db=self._session_db,
+                        current_session_id=self.session_id,
+                    )
+            elif function_name == "memory":
+                target = function_args.get("target", "memory")
+                from tools.memory_tool import memory_tool as _memory_tool
+                result = _memory_tool(
+                    action=function_args.get("action"),
+                    target=target,
+                    content=function_args.get("content"),
+                    old_text=function_args.get("old_text"),
+                    store=self._memory_store,
+                )
+                if self._honcho and target == "user" and function_args.get("action") == "add":
+                    self._honcho_save_user_observation(function_args.get("content", ""))
+            elif function_name == "clarify":
+                from tools.clarify_tool import clarify_tool as _clarify_tool
+                result = _clarify_tool(
+                    question=function_args.get("question", ""),
+                    choices=function_args.get("choices"),
+                    callback=self.clarify_callback,
+                )
+            elif function_name == "delegate_task":
+                from tools.delegate_tool import delegate_task as _delegate_task
+                result = _delegate_task(
+                    goal=function_args.get("goal"),
+                    context=function_args.get("context"),
+                    toolsets=function_args.get("toolsets"),
+                    tasks=function_args.get("tasks"),
+                    max_iterations=function_args.get("max_iterations"),
+                    parent_agent=self,
+                )
+            else:
+                result = json.dumps({"error": f"Unknown inline tool: {function_name}"})
+
+            _duration = (time.time() - _tool_start) * 1000
+            try:
+                from agent.audit import get_audit_logger
+                get_audit_logger().log_tool_call(
+                    tool_name=function_name, args=function_args,
+                    result=result, duration_ms=_duration,
+                    success=True, session_id=self.session_id,
+                )
+            except Exception:
+                pass
+            return result
+
+        except Exception as e:
+            _duration = (time.time() - _tool_start) * 1000
+            try:
+                from agent.audit import get_audit_logger
+                get_audit_logger().log_tool_error(
+                    tool_name=function_name, args=function_args,
+                    error=str(e), error_type=type(e).__name__,
+                    duration_ms=_duration, session_id=self.session_id,
+                )
+            except Exception:
+                pass
+            raise
 
     def _execute_tool_calls_concurrent(self, assistant_message, messages: list, effective_task_id: str, api_call_count: int = 0) -> None:
         """Execute multiple tool calls concurrently using a thread pool.
@@ -4809,6 +4844,27 @@ class AIAgent:
             result_preview = function_result if self.verbose_logging else (
                 function_result[:200] if len(function_result) > 200 else function_result
             )
+
+            # Audit log: inline tools (sequential path) — registry tools
+            # are already audited in model_tools.py, skip to avoid double logging.
+            if function_name in self._INLINE_TOOLS:
+                try:
+                    from agent.audit import get_audit_logger
+                    _is_err, _ = _detect_tool_failure(function_name, function_result)
+                    if _is_err:
+                        get_audit_logger().log_tool_error(
+                            tool_name=function_name, args=function_args,
+                            error=function_result[:500], duration_ms=tool_duration * 1000,
+                            session_id=self.session_id,
+                        )
+                    else:
+                        get_audit_logger().log_tool_call(
+                            tool_name=function_name, args=function_args,
+                            result=function_result, duration_ms=tool_duration * 1000,
+                            success=True, session_id=self.session_id,
+                        )
+                except Exception:
+                    pass
 
             # Log tool errors to the persistent error log so [error] tags
             # in the UI always have a corresponding detailed entry on disk.

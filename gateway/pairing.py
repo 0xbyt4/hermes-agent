@@ -187,6 +187,18 @@ class PairingStore:
         # Add to approved list
         self._approve_user(platform, entry["user_id"], entry.get("user_name", ""))
 
+        try:
+            from agent.audit import get_audit_logger
+            get_audit_logger().log_security_event(
+                event_type="pairing_approved",
+                severity="info",
+                user_id=entry["user_id"],
+                platform=platform,
+                context={"user_name": entry.get("user_name", "")},
+            )
+        except Exception:
+            pass
+
         return {
             "user_id": entry["user_id"],
             "user_name": entry.get("user_name", ""),
