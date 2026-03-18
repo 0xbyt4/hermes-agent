@@ -3079,7 +3079,7 @@ class AIAgent:
                 from agent.audit import get_audit_logger, EVENT_AUTH_FAILURE
                 get_audit_logger().log_security_event(
                     event_type=EVENT_AUTH_FAILURE, severity="error",
-                    session_id=self.session_id,
+                    **self._audit_ctx(),
                     context={"reason": "resolve_token_exception", "error": str(exc)[:200]},
                 )
             except Exception:
@@ -3105,7 +3105,7 @@ class AIAgent:
                 from agent.audit import get_audit_logger, EVENT_AUTH_FAILURE
                 get_audit_logger().log_security_event(
                     event_type=EVENT_AUTH_FAILURE, severity="error",
-                    session_id=self.session_id,
+                    **self._audit_ctx(),
                     context={"reason": "rebuild_client_failed", "error": str(exc)[:200]},
                 )
             except Exception:
@@ -3435,7 +3435,7 @@ class AIAgent:
                         from agent.audit import get_audit_logger, EVENT_FALLBACK
                         get_audit_logger().log_session_event(
                             event_type=EVENT_FALLBACK,
-                            session_id=self.session_id,
+                            **self._audit_ctx(),
                             context={"reason": "streaming_fallback", "error": str(e)[:200]},
                         )
                     except Exception:
@@ -3530,7 +3530,7 @@ class AIAgent:
                 from agent.audit import get_audit_logger, EVENT_FALLBACK
                 get_audit_logger().log_session_event(
                     event_type=EVENT_FALLBACK,
-                    session_id=self.session_id,
+                    **self._audit_ctx(),
                     model=fb_model,
                     provider=fb_provider,
                     context={"old_model": old_model, "new_model": fb_model, "new_provider": fb_provider},
@@ -4270,7 +4270,7 @@ class AIAgent:
             from agent.audit import get_audit_logger, EVENT_COMPRESSION
             get_audit_logger().log_session_event(
                 event_type=EVENT_COMPRESSION,
-                session_id=self.session_id,
+                **self._audit_ctx(),
                 context={
                     "messages_before": pre_count,
                     "messages_after": post_count,
@@ -4354,6 +4354,13 @@ class AIAgent:
             assistant_message, messages, effective_task_id, api_call_count
         )
 
+    def _audit_ctx(self) -> dict:
+        """Common audit fields for this agent instance."""
+        return {
+            "session_id": self.session_id,
+            "platform": getattr(self, "platform", None),
+        }
+
     # Tools handled inline (not via model_tools.py) — need separate audit logging
     _INLINE_TOOLS = {"todo", "session_search", "memory", "clarify", "delegate_task"}
 
@@ -4434,7 +4441,7 @@ class AIAgent:
                 get_audit_logger().log_tool_call(
                     tool_name=function_name, args=function_args,
                     result=result, duration_ms=_duration,
-                    success=True, session_id=self.session_id,
+                    success=True, **self._audit_ctx(),
                 )
             except Exception:
                 pass
@@ -4447,7 +4454,7 @@ class AIAgent:
                 get_audit_logger().log_tool_error(
                     tool_name=function_name, args=function_args,
                     error=str(e), error_type=type(e).__name__,
-                    duration_ms=_duration, session_id=self.session_id,
+                    duration_ms=_duration, **self._audit_ctx(),
                 )
             except Exception:
                 pass
@@ -4855,13 +4862,13 @@ class AIAgent:
                         get_audit_logger().log_tool_error(
                             tool_name=function_name, args=function_args,
                             error=function_result[:500], duration_ms=tool_duration * 1000,
-                            session_id=self.session_id,
+                            **self._audit_ctx(),
                         )
                     else:
                         get_audit_logger().log_tool_call(
                             tool_name=function_name, args=function_args,
                             result=function_result, duration_ms=tool_duration * 1000,
-                            success=True, session_id=self.session_id,
+                            success=True, **self._audit_ctx(),
                         )
                 except Exception:
                     pass

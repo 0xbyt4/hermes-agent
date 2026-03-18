@@ -364,6 +364,7 @@ def handle_function_call(
                 duration_ms=_tool_duration_ms,
                 success=True,
                 session_id=task_id,
+                platform=os.getenv("HERMES_SESSION_PLATFORM"),
             )
         except Exception:
             pass
@@ -385,6 +386,7 @@ def handle_function_call(
                 error_type=type(e).__name__,
                 duration_ms=_tool_duration_ms,
                 session_id=task_id,
+                platform=os.getenv("HERMES_SESSION_PLATFORM"),
             )
         except Exception:
             pass
