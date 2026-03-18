@@ -6896,6 +6896,18 @@ class HermesCLI:
                     self._session_db.end_session(self.agent.session_id, "cli_close")
                 except Exception as e:
                     logger.debug("Could not close session in DB: %s", e)
+
+            # Audit log: CLI session end
+            try:
+                from agent.audit import get_audit_logger, EVENT_SESSION_END
+                get_audit_logger().log_session_event(
+                    event_type=EVENT_SESSION_END,
+                    session_id=self.session_id if hasattr(self, 'session_id') else None,
+                    platform="cli",
+                )
+            except Exception:
+                pass
+
             _run_cleanup()
             self._print_exit_summary()
 

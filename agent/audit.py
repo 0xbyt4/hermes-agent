@@ -32,7 +32,6 @@ EVENT_TOOL_CALL = "tool_call"
 EVENT_TOOL_ERROR = "tool_error"
 EVENT_API_CALL = "api_call"
 EVENT_API_ERROR = "api_error"
-EVENT_API_RETRY = "api_retry"
 EVENT_SESSION_START = "session_start"
 EVENT_SESSION_END = "session_end"
 EVENT_AUTH_REFRESH = "auth_refresh"
@@ -41,7 +40,6 @@ EVENT_APPROVAL_REQUEST = "approval_request"
 EVENT_APPROVAL_RESULT = "approval_result"
 EVENT_COMPRESSION = "compression"
 EVENT_FALLBACK = "fallback_activated"
-EVENT_COST = "cost_estimate"
 
 _HERMES_HOME = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes")))
 _AUDIT_DB_PATH = _HERMES_HOME / "audit.db"
@@ -100,6 +98,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS events_fts_insert AFTER INSERT ON events BEGIN
     INSERT INTO events_fts(rowid, error_message, tool_name, context)
     VALUES (new.id, new.error_message, new.tool_name, new.context);
+END;
+
+CREATE TRIGGER IF NOT EXISTS events_fts_delete AFTER DELETE ON events BEGIN
+    INSERT INTO events_fts(events_fts, rowid, error_message, tool_name, context)
+    VALUES ('delete', old.id, old.error_message, old.tool_name, old.context);
 END;
 """
 
@@ -438,7 +441,7 @@ class AuditLogger:
                 "tool_calls": tool_calls,
                 "api_calls": api_calls,
                 "api_errors": api_errors,
-                "error_rate": f"{(errors / total * 100):.1f}%" if total else "0%",
+                "error_rate": f"{(errors / (api_calls + api_errors + tool_calls) * 100):.1f}%" if (api_calls + api_errors + tool_calls) else "0%",
                 "top_errors": [
                     {"type": e[0], "message": e[1][:100] if e[1] else "", "count": e[2]}
                     for e in top_errors
@@ -487,11 +490,13 @@ class AuditLogger:
         # Fallback: LIKE search on error_message, tool_name, context
         try:
             with self._lock:
-                like_pat = f"%{query}%"
+                escaped = query.replace("%", "\\%").replace("_", "\\_")
+                like_pat = f"%{escaped}%"
                 cursor = self._conn.execute(
-                    "SELECT * FROM events WHERE error_message LIKE ? "
-                    "OR tool_name LIKE ? OR context LIKE ? "
-                    "OR provider LIKE ? OR model LIKE ? OR event_type LIKE ? "
+                    "SELECT * FROM events WHERE error_message LIKE ? ESCAPE '\\' "
+                    "OR tool_name LIKE ? ESCAPE '\\' OR context LIKE ? ESCAPE '\\' "
+                    "OR provider LIKE ? ESCAPE '\\' OR model LIKE ? ESCAPE '\\' "
+                    "OR event_type LIKE ? ESCAPE '\\' "
                     "ORDER BY timestamp DESC LIMIT ?",
                     (like_pat, like_pat, like_pat, like_pat, like_pat, like_pat, limit),
                 )
@@ -594,12 +599,20 @@ class AuditLogger:
                         "evidence": {"tool": tool, "count": count},
                     })
 
-                # 5. Security: denied commands
-                denied = cur(
-                    "SELECT COUNT(*) FROM events WHERE timestamp > ? "
-                    "AND event_type = 'approval_result' AND severity = 'warning'",
+                # 5. Security: denied commands (check context JSON for approved=false)
+                denial_rows = cur(
+                    "SELECT context FROM events WHERE timestamp > ? "
+                    "AND event_type = 'approval_result' AND context IS NOT NULL",
                     (since,)
-                ).fetchone()[0]
+                ).fetchall()
+                denied = 0
+                for (ctx_str,) in denial_rows:
+                    try:
+                        ctx = json.loads(ctx_str)
+                        if ctx.get("approved") is False:
+                            denied += 1
+                    except Exception:
+                        pass
                 if denied >= 3:
                     problems.append({
                         "type": "frequent_denials",
