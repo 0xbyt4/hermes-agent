@@ -79,7 +79,7 @@ from hermes_constants import OPENROUTER_BASE_URL
 from agent.memory_manager import build_memory_context_block
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY, PLATFORM_HINTS,
-    MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
+    MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE, build_social_guidance,
     build_nous_subscription_prompt,
 )
 from agent.model_metadata import (
@@ -2725,6 +2725,8 @@ class AIAgent:
             tool_guidance.append(SESSION_SEARCH_GUIDANCE)
         if "skill_manage" in self.valid_tool_names:
             tool_guidance.append(SKILLS_GUIDANCE)
+        if "social" in self.valid_tool_names:
+            tool_guidance.append(build_social_guidance())
         if tool_guidance:
             prompt_parts.append(" ".join(tool_guidance))
 
