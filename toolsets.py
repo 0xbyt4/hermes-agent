@@ -169,6 +169,12 @@ TOOLSETS = {
         "tools": ["memory"],
         "includes": []
     },
+
+    "social": {
+        "description": "Agent social network - post, reply, like, follow, read feed, search (Ed25519 signed)",
+        "tools": ["social"],
+        "includes": []
+    },
     
     "session_search": {
         "description": "Search and recall past conversations with summarization",
