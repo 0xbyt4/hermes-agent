@@ -34,17 +34,29 @@ _PROVIDER_PREFIXES: frozenset[str] = frozenset({
 })
 
 
+_OLLAMA_TAG_PATTERN = re.compile(
+    r"^(\d+\.?\d*b|latest|stable|q\d|fp?\d|instruct|chat|coder|vision|text)",
+    re.IGNORECASE,
+)
+
+
 def _strip_provider_prefix(model: str) -> str:
     """Strip a recognised provider prefix from a model string.
 
     ``"local:my-model"`` → ``"my-model"``
     ``"qwen3.5:27b"``   → ``"qwen3.5:27b"``  (unchanged — not a provider prefix)
+    ``"qwen:0.5b"``     → ``"qwen:0.5b"``    (unchanged — Ollama model:tag)
+    ``"deepseek:latest"``→ ``"deepseek:latest"``(unchanged — Ollama model:tag)
     """
     if ":" not in model or model.startswith("http"):
         return model
-    prefix = model.split(":", 1)[0].strip().lower()
-    if prefix in _PROVIDER_PREFIXES:
-        return model.split(":", 1)[1]
+    prefix, suffix = model.split(":", 1)
+    prefix_lower = prefix.strip().lower()
+    if prefix_lower in _PROVIDER_PREFIXES:
+        # Don't strip if suffix looks like an Ollama tag (e.g. "7b", "latest", "q4_0")
+        if _OLLAMA_TAG_PATTERN.match(suffix.strip()):
+            return model
+        return suffix
     return model
 
 _model_metadata_cache: Dict[str, Dict[str, Any]] = {}
