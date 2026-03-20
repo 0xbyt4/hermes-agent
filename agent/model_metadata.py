@@ -812,7 +812,7 @@ def get_model_context_length(
         ctx = _resolve_nous_context_length(model)
         if ctx:
             return ctx
-    elif provider:
+    if provider:
         from agent.models_dev import lookup_models_dev_context
         ctx = lookup_models_dev_context(provider, model)
         if ctx:
