@@ -288,6 +288,8 @@ class GatewayConfig:
             # WeCom uses extra dict for bot credentials
             elif platform == Platform.WECOM and config.extra.get("bot_id"):
                 connected.append(platform)
+            elif platform == Platform.SOCIAL and config.extra.get("relay"):
+                connected.append(platform)
         return connected
     
     def get_home_channel(self, platform: Platform) -> Optional[HomeChannel]:
