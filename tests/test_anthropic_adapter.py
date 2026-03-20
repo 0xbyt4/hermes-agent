@@ -578,21 +578,31 @@ class TestConvertMessages:
 
     def test_converts_tool_results(self):
         messages = [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "tc_1", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+            ]},
             {"role": "tool", "tool_call_id": "tc_1", "content": "result data"},
         ]
         _, result = convert_messages_to_anthropic(messages)
-        assert result[0]["role"] == "user"
-        assert result[0]["content"][0]["type"] == "tool_result"
-        assert result[0]["content"][0]["tool_use_id"] == "tc_1"
+        # tool_result is in a user message following the assistant tool_use
+        tool_result_msg = [m for m in result if m["role"] == "user"][0]
+        tool_result_block = [b for b in tool_result_msg["content"] if b.get("type") == "tool_result"][0]
+        assert tool_result_block["tool_use_id"] == "tc_1"
 
     def test_merges_consecutive_tool_results(self):
         messages = [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "tc_1", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+                {"id": "tc_2", "type": "function", "function": {"name": "write", "arguments": "{}"}},
+            ]},
             {"role": "tool", "tool_call_id": "tc_1", "content": "result 1"},
             {"role": "tool", "tool_call_id": "tc_2", "content": "result 2"},
         ]
         _, result = convert_messages_to_anthropic(messages)
-        assert len(result) == 1
-        assert len(result[0]["content"]) == 2
+        user_msgs = [m for m in result if m["role"] == "user"]
+        assert len(user_msgs) == 1
+        tool_results = [b for b in user_msgs[0]["content"] if b.get("type") == "tool_result"]
+        assert len(tool_results) == 2
 
     def test_strips_orphaned_tool_use(self):
         messages = [
@@ -609,6 +619,29 @@ class TestConvertMessages:
         # tc_orphan has no matching tool_result, should be stripped
         assistant_blocks = result[0]["content"]
         assert all(b.get("type") != "tool_use" for b in assistant_blocks)
+
+    def test_strips_orphaned_tool_result(self):
+        """tool_result whose matching tool_use was compressed away should be stripped."""
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "tc_alive", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+            ]},
+            {"role": "tool", "tool_call_id": "tc_alive", "content": "file data"},
+            # Orphaned: tool_use for tc_dead was compressed away
+            {"role": "tool", "tool_call_id": "tc_dead", "content": "stale data"},
+            {"role": "user", "content": "Thanks"},
+        ]
+        _, result = convert_messages_to_anthropic(messages)
+        # tc_dead should be stripped, tc_alive should survive
+        all_tool_result_ids = set()
+        for m in result:
+            if isinstance(m.get("content"), list):
+                for b in m["content"]:
+                    if b.get("type") == "tool_result":
+                        all_tool_result_ids.add(b["tool_use_id"])
+        assert "tc_alive" in all_tool_result_ids
+        assert "tc_dead" not in all_tool_result_ids
 
     def test_system_with_cache_control(self):
         messages = [
@@ -641,13 +674,16 @@ class TestConvertMessages:
     def test_tool_cache_control_is_preserved_on_tool_result_block(self):
         messages = apply_anthropic_cache_control([
             {"role": "system", "content": "System prompt"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "tc_1", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+            ]},
             {"role": "tool", "tool_call_id": "tc_1", "content": "result"},
         ])
 
         _, result = convert_messages_to_anthropic(messages)
-        tool_block = result[0]["content"][0]
+        user_msg = [m for m in result if m["role"] == "user"][0]
+        tool_block = [b for b in user_msg["content"] if b.get("type") == "tool_result"][0]
 
-        assert tool_block["type"] == "tool_result"
         assert tool_block["tool_use_id"] == "tc_1"
         assert tool_block["content"] == "result"
         assert tool_block["cache_control"] == {"type": "ephemeral"}
