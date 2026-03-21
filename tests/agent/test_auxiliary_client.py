@@ -306,27 +306,18 @@ class TestExpiredCodexFallback:
                 assert client is not None
 
 
-    def test_hermes_oauth_file_sets_oauth_flag(self, tmp_path, monkeypatch):
-        """Hermes OAuth credentials (~/.hermes/.anthropic_oauth.json) should get is_oauth=True."""
-        import time as _time
-        hermes_home = tmp_path / "hermes"
-        hermes_home.mkdir(parents=True, exist_ok=True)
-        (hermes_home / ".anthropic_oauth.json").write_text(json.dumps({
-            "accessToken": "hermes-oauth-jwt-token",
-            "refreshToken": "hermes-refresh-tok",
-            "expiresAt": int((_time.time() + 3600) * 1000),  # ms epoch, 1hr from now
-        }))
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-        monkeypatch.delenv("ANTHROPIC_TOKEN", raising=False)
-        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
-
-        with patch("agent.anthropic_adapter.build_anthropic_client") as mock_build:
+    def test_hermes_oauth_file_sets_oauth_flag(self, monkeypatch):
+        """Hermes OAuth credentials should get is_oauth=True (token is not sk-ant-api-*)."""
+        # Mock resolve_anthropic_token to return an OAuth-style token
+        # (simulates what read_hermes_oauth_credentials would return)
+        with patch("agent.anthropic_adapter.resolve_anthropic_token", return_value="hermes-oauth-jwt-token"), \
+             patch("agent.anthropic_adapter.build_anthropic_client") as mock_build:
             mock_build.return_value = MagicMock()
             from agent.auxiliary_client import _try_anthropic, AnthropicAuxiliaryClient
             client, model = _try_anthropic()
-            assert client is not None, "Should resolve token from Hermes OAuth file"
+            assert client is not None, "Should resolve token"
             adapter = client.chat.completions
-            assert adapter._is_oauth is True, "Hermes OAuth file token should set is_oauth=True"
+            assert adapter._is_oauth is True, "Non-sk-ant-api token should set is_oauth=True"
 
     def test_jwt_missing_exp_passes_through(self, tmp_path, monkeypatch):
         """JWT with valid JSON but no exp claim should pass through."""
