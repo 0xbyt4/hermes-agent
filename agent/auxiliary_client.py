@@ -480,7 +480,7 @@ def _read_codex_access_token() -> Optional[str]:
         try:
             import base64
             payload = access_token.split(".")[1]
-            payload += "=" * (4 - len(payload) % 4)
+            payload += "=" * (-len(payload) % 4)
             claims = json.loads(base64.urlsafe_b64decode(payload))
             exp = claims.get("exp", 0)
             if exp and time.time() > exp:
