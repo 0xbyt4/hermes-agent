@@ -2405,6 +2405,7 @@ class TestAnthropicCredentialRefresh:
             agent = AIAgent(
                 api_key="sk-ant-oat01-stale-token",
                 api_mode="anthropic_messages",
+                provider="anthropic",
                 quiet_mode=True,
                 skip_context_files=True,
                 skip_memory=True,
@@ -2907,6 +2908,7 @@ class TestOAuthFlagAfterCredentialRefresh:
 
     def test_oauth_flag_updates_api_key_to_oauth(self, agent):
         """Refreshing from API key to OAuth token must set flag to True."""
+        agent.provider = "anthropic"
         agent.api_mode = "anthropic_messages"
         agent._anthropic_api_key = "sk-ant-api-old"
         agent._anthropic_client = MagicMock()
@@ -2925,6 +2927,7 @@ class TestOAuthFlagAfterCredentialRefresh:
 
     def test_oauth_flag_updates_oauth_to_api_key(self, agent):
         """Refreshing from OAuth to API key must set flag to False."""
+        agent.provider = "anthropic"
         agent.api_mode = "anthropic_messages"
         agent._anthropic_api_key = "sk-ant-setup-old"
         agent._anthropic_client = MagicMock()
