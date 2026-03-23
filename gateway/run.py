@@ -3118,25 +3118,32 @@ class GatewayRunner:
         platform_name = source.platform.value if source.platform else "unknown"
         chat_id = source.chat_id
         chat_name = source.chat_name or chat_id
-        
+
         env_key = f"{platform_name.upper()}_HOME_CHANNEL"
-        
-        # Save to config.yaml
+
+        # Save to .env so it persists across restarts.
+        # The gateway reads home channels from env vars on startup via
+        # _apply_env_overrides(), so .env is the correct storage location.
+        # Previously this wrote to config.yaml as a top-level key, which
+        # was never read back — home channel was lost on restart.
         try:
-            import yaml
-            config_path = _hermes_home / 'config.yaml'
-            user_config = {}
-            if config_path.exists():
-                with open(config_path, encoding="utf-8") as f:
-                    user_config = yaml.safe_load(f) or {}
-            user_config[env_key] = chat_id
-            with open(config_path, 'w', encoding="utf-8") as f:
-                yaml.dump(user_config, f, default_flow_style=False)
+            from hermes_cli.config import save_env_value
+            save_env_value(env_key, str(chat_id))
             # Also set in the current environment so it takes effect immediately
             os.environ[env_key] = str(chat_id)
         except Exception as e:
             return f"Failed to save home channel: {e}"
-        
+
+        # Update the live config so delivery works without restart
+        platform = source.platform
+        if platform and platform in self.config.platforms:
+            from gateway.config import HomeChannel
+            self.config.platforms[platform].home_channel = HomeChannel(
+                platform=platform,
+                chat_id=str(chat_id),
+                name=chat_name,
+            )
+
         return (
             f"✅ Home channel set to **{chat_name}** (ID: {chat_id}).\n"
             f"Cron jobs and cross-platform messages will be delivered here."
