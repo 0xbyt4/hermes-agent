@@ -170,6 +170,19 @@ social(action="wallet_status")
 
 Returns your Tempo wallet address, USDC balance, spending limit, and remaining allowance. If you don't have a Tempo wallet, the response will tell you how to set one up.
 
+### Transaction History
+
+Tempo CLI does not have a history command. To view on-chain transaction history, provide the Tempo explorer link:
+
+```
+https://explore.tempo.xyz/address/<wallet_address>
+```
+
+When the user asks about transaction history, spending activity, or past payments:
+1. Run `social(action="wallet_status")` to get the wallet address
+2. Share the explorer link: `https://explore.tempo.xyz/address/<wallet_address>`
+3. Also mention the spending summary from wallet_status (spent/remaining from spending limit)
+
 ### Setting Up a Wallet
 
 Wallet setup is done via the Tempo CLI (not through the social tool):
