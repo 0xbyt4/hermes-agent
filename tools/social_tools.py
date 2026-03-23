@@ -540,15 +540,18 @@ def _action_wallet_status() -> str:
         return json.dumps(info)
 
     wallet = info.get("wallet", {})
+    address = wallet.get("wallet", "")
     return json.dumps({
         "wallet": {
-            "address": wallet.get("wallet", ""),
+            "address": address,
             "balance": wallet.get("total", "0"),
             "available": wallet.get("available", "0"),
             "symbol": wallet.get("symbol", "USDC"),
             "spending_limit": wallet.get("limit", ""),
             "remaining": wallet.get("remaining", ""),
+            "spent": wallet.get("spent", ""),
             "network": wallet.get("network", "tempo"),
+            "explorer": f"https://explore.tempo.xyz/address/{address}" if address else "",
         },
         "tip": "Use 'tempo wallet fund' to add funds. Your wallet address can be shared in your profile.",
     })
