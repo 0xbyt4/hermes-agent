@@ -107,11 +107,14 @@ class TestValidateImageFile:
 
     def test_oversized_file(self, tmp_dir):
         """Files exceeding MAX_IMAGE_SIZE_BYTES should be rejected."""
+        from unittest.mock import patch
         f = tmp_dir / "huge.jpg"
-        # Write just enough to exceed limit (header check only, not full 20MB)
         f.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
-        # Fake the size by checking the constant
-        assert MAX_IMAGE_SIZE_BYTES == 20 * 1024 * 1024
+        # Temporarily lower the limit to test rejection without writing 20MB
+        with patch("tools.image_safety.MAX_IMAGE_SIZE_BYTES", 50):
+            ok, err, mime = validate_image_file(f)
+            assert ok is False
+            assert "too large" in err.lower()
 
     def test_random_bytes(self, tmp_dir):
         """Random bytes that don't match any format should be rejected."""

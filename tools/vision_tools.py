@@ -281,7 +281,11 @@ async def vision_analyze_tool(
         # Determine if this is a local file path or a remote URL
         local_path = Path(os.path.expanduser(image_url))
         if local_path.is_file():
-            # Local file path (e.g. from platform image cache) -- skip download
+            # Local file path (e.g. from platform image cache) -- validate format
+            from tools.image_safety import validate_image_file
+            is_valid, err_msg, _ = validate_image_file(local_path)
+            if not is_valid:
+                raise ValueError(f"Image validation failed: {err_msg}")
             logger.info("Using local image file: %s", image_url)
             temp_image_path = local_path
             should_cleanup = False  # Don't delete cached/local files

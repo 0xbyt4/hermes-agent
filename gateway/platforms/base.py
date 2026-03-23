@@ -57,13 +57,35 @@ def cache_image_from_bytes(data: bytes, ext: str = ".jpg") -> str:
     """
     Save raw image bytes to the cache and return the absolute file path.
 
+    Validates that the data is a real image (magic-byte check) and enforces
+    a size limit before writing to disk.
+
     Args:
         data: Raw image bytes.
         ext:  File extension including the dot (e.g. ".jpg", ".png").
 
     Returns:
         Absolute path to the cached image file as a string.
+
+    Raises:
+        ValueError: If the data is not a recognized image or exceeds size limit.
     """
+    from tools.image_safety import MAX_IMAGE_SIZE_BYTES, _ALLOWED_IMAGE_MIMES
+
+    if len(data) > MAX_IMAGE_SIZE_BYTES:
+        raise ValueError(f"Image too large ({len(data) / 1024 / 1024:.1f} MB)")
+
+    # Validate magic bytes before writing to disk
+    try:
+        import filetype
+        kind = filetype.match(data)
+        if kind is None or kind.mime not in _ALLOWED_IMAGE_MIMES:
+            detected = kind.mime if kind else "unknown"
+            logger.warning("Rejected non-image from cache: detected %s", detected)
+            raise ValueError(f"Not a valid image (detected: {detected})")
+    except ImportError:
+        pass  # filetype not available — write as-is
+
     cache_dir = get_image_cache_dir()
     filename = f"img_{uuid.uuid4().hex[:12]}{ext}"
     filepath = cache_dir / filename
@@ -75,7 +97,8 @@ async def cache_image_from_url(url: str, ext: str = ".jpg") -> str:
     """
     Download an image from a URL and save it to the local cache.
 
-    Uses httpx for async download with a reasonable timeout.
+    Validates the URL against SSRF, checks size, and verifies the
+    downloaded content is a real image before caching.
 
     Args:
         url: The HTTP/HTTPS URL to download from.
@@ -83,8 +106,15 @@ async def cache_image_from_url(url: str, ext: str = ".jpg") -> str:
 
     Returns:
         Absolute path to the cached image file as a string.
+
+    Raises:
+        ValueError: If the URL is blocked (SSRF) or content is not a valid image.
     """
     import httpx
+    from tools.url_safety import is_safe_url
+
+    if not is_safe_url(url):
+        raise ValueError(f"Blocked: URL targets a private or internal address")
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         response = await client.get(
