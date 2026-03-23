@@ -29,6 +29,8 @@ dependencies = [
   "firecrawl-py",
   "parallel-web>=0.4.2",
   "fal-client",
+  # Image format validation (magic-byte detection, pure Python)
+  "filetype>=1.2.0",
   # Text-to-speech (Edge TTS is free, no API key needed)
   "edge-tts",
   "faster-whisper>=1.0.0",

@@ -74,6 +74,11 @@ def _validate_image_url(url: str) -> bool:
     if not is_safe_url(url):
         return False
 
+    # Block SVG URLs (can contain embedded scripts)
+    path_lower = parsed.path.lower()
+    if path_lower.endswith(".svg") or path_lower.endswith(".svgz"):
+        return False
+
     return True
 
 
@@ -132,10 +137,24 @@ async def _download_image(image_url: str, destination: Path, max_retries: int = 
                     },
                 )
                 response.raise_for_status()
-                
+
+                # Check Content-Length before reading body into memory
+                from tools.image_safety import check_content_length, validate_image_file
+                content_length = response.headers.get("content-length")
+                cl_int = int(content_length) if content_length else None
+                cl_ok, cl_err = check_content_length(cl_int)
+                if not cl_ok:
+                    raise ValueError(cl_err)
+
                 # Save the image content
                 destination.write_bytes(response.content)
-            
+
+                # Validate the downloaded file is a real image
+                is_valid, err_msg, detected_mime = validate_image_file(destination)
+                if not is_valid:
+                    destination.unlink(missing_ok=True)
+                    raise ValueError(f"Image validation failed: {err_msg}")
+
             return destination
         except Exception as e:
             last_error = e
@@ -157,25 +176,17 @@ async def _download_image(image_url: str, destination: Path, max_retries: int = 
 
 def _determine_mime_type(image_path: Path) -> str:
     """
-    Determine the MIME type of an image based on its file extension.
-    
+    Determine the MIME type of an image from its content (magic bytes).
+    Falls back to extension-based detection if filetype is unavailable.
+
     Args:
         image_path (Path): Path to the image file
-        
+
     Returns:
         str: The MIME type (defaults to image/jpeg if unknown)
     """
-    extension = image_path.suffix.lower()
-    mime_types = {
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.png': 'image/png',
-        '.gif': 'image/gif',
-        '.bmp': 'image/bmp',
-        '.webp': 'image/webp',
-        '.svg': 'image/svg+xml'
-    }
-    return mime_types.get(extension, 'image/jpeg')
+    from tools.image_safety import get_real_mime_type
+    return get_real_mime_type(image_path)
 
 
 def _image_to_base64_data_url(image_path: Path, mime_type: Optional[str] = None) -> str:
