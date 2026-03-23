@@ -1,5 +1,10 @@
 """Tests for gateway configuration management."""
 
+import os
+from unittest.mock import patch, MagicMock, AsyncMock
+
+import pytest
+
 from gateway.config import (
     GatewayConfig,
     HomeChannel,
@@ -7,6 +12,7 @@ from gateway.config import (
     PlatformConfig,
     SessionResetPolicy,
     load_gateway_config,
+    _apply_env_overrides,
 )
 
 
@@ -192,3 +198,82 @@ class TestLoadGatewayConfig:
 
         assert config.unauthorized_dm_behavior == "ignore"
         assert config.platforms[Platform.WHATSAPP].extra["unauthorized_dm_behavior"] == "pair"
+
+
+# ---------------------------------------------------------------------------
+# /sethome persistence tests
+# ---------------------------------------------------------------------------
+
+
+class TestSethomeEnvPersistence:
+    """Verify /sethome writes to .env and survives restart."""
+
+    def test_env_override_loads_home_channel(self, monkeypatch):
+        """When HOME_CHANNEL env var is set, gateway config picks it up."""
+        monkeypatch.setenv("DISCORD_HOME_CHANNEL", "123456789")
+        config = GatewayConfig()
+        config.platforms[Platform.DISCORD] = PlatformConfig(enabled=True)
+        _apply_env_overrides(config)
+        assert config.platforms[Platform.DISCORD].home_channel is not None
+        assert config.platforms[Platform.DISCORD].home_channel.chat_id == "123456789"
+
+    def test_signal_home_channel_env(self, monkeypatch):
+        """SIGNAL_HOME_CHANNEL env var should set Signal home channel."""
+        monkeypatch.setenv("SIGNAL_HTTP_URL", "http://localhost:8080")
+        monkeypatch.setenv("SIGNAL_ACCOUNT", "+1999999999")
+        monkeypatch.setenv("SIGNAL_HOME_CHANNEL", "+1234567890")
+        config = GatewayConfig()
+        _apply_env_overrides(config)
+        assert Platform.SIGNAL in config.platforms
+        assert config.platforms[Platform.SIGNAL].home_channel is not None
+        assert config.platforms[Platform.SIGNAL].home_channel.chat_id == "+1234567890"
+
+    def test_telegram_home_channel_env(self, monkeypatch):
+        """TELEGRAM_HOME_CHANNEL env var should set Telegram home channel."""
+        monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "987654321")
+        config = GatewayConfig()
+        config.platforms[Platform.TELEGRAM] = PlatformConfig(enabled=True)
+        _apply_env_overrides(config)
+        assert config.platforms[Platform.TELEGRAM].home_channel is not None
+        assert config.platforms[Platform.TELEGRAM].home_channel.chat_id == "987654321"
+
+    def test_missing_env_no_home_channel(self, monkeypatch):
+        """Without env var, no home channel is set."""
+        monkeypatch.delenv("DISCORD_HOME_CHANNEL", raising=False)
+        config = GatewayConfig()
+        config.platforms[Platform.DISCORD] = PlatformConfig(enabled=True)
+        _apply_env_overrides(config)
+        assert config.platforms[Platform.DISCORD].home_channel is None
+
+    def test_sethome_writes_to_env_file(self, tmp_path, monkeypatch):
+        """Verify save_env_value writes HOME_CHANNEL to .env file."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / ".env").write_text("")
+
+        from hermes_cli.config import save_env_value
+        save_env_value("DISCORD_HOME_CHANNEL", "111222333")
+
+        env_content = (tmp_path / ".env").read_text()
+        assert "DISCORD_HOME_CHANNEL=111222333" in env_content
+
+    def test_env_file_survives_reload(self, tmp_path, monkeypatch):
+        """Written .env value is available after reload."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / ".env").write_text("")
+
+        from hermes_cli.config import save_env_value
+        save_env_value("TELEGRAM_HOME_CHANNEL", "444555666")
+
+        # Clear env and reload
+        monkeypatch.delenv("TELEGRAM_HOME_CHANNEL", raising=False)
+        assert os.getenv("TELEGRAM_HOME_CHANNEL") is None
+
+        from hermes_cli.env_loader import load_hermes_dotenv
+        load_hermes_dotenv()
+        assert os.getenv("TELEGRAM_HOME_CHANNEL") == "444555666"
+
+    def test_signal_in_extra_env_keys(self):
+        """SIGNAL_HOME_CHANNEL should be in _EXTRA_ENV_KEYS."""
+        from hermes_cli.config import _EXTRA_ENV_KEYS
+        assert "SIGNAL_HOME_CHANNEL" in _EXTRA_ENV_KEYS
+        assert "SLACK_HOME_CHANNEL" in _EXTRA_ENV_KEYS
