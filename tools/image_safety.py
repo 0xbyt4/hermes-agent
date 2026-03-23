@@ -26,6 +26,9 @@ _ALLOWED_IMAGE_MIMES = frozenset({
     "image/webp",
     "image/bmp",
     "image/tiff",
+    "image/heic",       # iPhone default camera format
+    "image/heif",       # HEIF container (related to HEIC)
+    "image/avif",       # Next-gen format (Chrome, Firefox)
 })
 
 # SVG is text-based and can contain scripts — blocked by default
@@ -114,6 +117,8 @@ def get_real_mime_type(path: Path) -> str:
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
         ".png": "image/png", ".gif": "image/gif",
         ".webp": "image/webp", ".bmp": "image/bmp",
+        ".heic": "image/heic", ".heif": "image/heif",
+        ".avif": "image/avif",
         ".tiff": "image/tiff", ".tif": "image/tiff",
     }
     return ext_map.get(path.suffix.lower(), "image/jpeg")
@@ -121,7 +126,7 @@ def get_real_mime_type(path: Path) -> str:
 
 def _fallback_extension_check(path: Path) -> Tuple[bool, str, Optional[str]]:
     """Extension-only validation when filetype library is not available."""
-    allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
+    allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif", ".avif"}
     ext = path.suffix.lower()
     if ext not in allowed_extensions:
         return False, f"Unsupported image extension: {ext}", None
