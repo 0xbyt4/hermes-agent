@@ -48,9 +48,10 @@ jobs:
           # (it contains grep patterns for base64/exec/subprocess that would
           # false-positive against itself).
           if echo "$CHANGED_FILES" | grep -q 'supply-chain-audit\.yml$'; then
+            CRITICAL=true
             FINDINGS="${FINDINGS}
-          ### WARNING: Supply chain audit workflow modified
-          The audit workflow itself was changed. Review the diff manually to ensure scan logic was not weakened.
+          ### CRITICAL: Supply chain audit workflow modified
+          The audit workflow itself was changed. This file is excluded from pattern scanning (to avoid false positives), so changes MUST be reviewed manually to ensure scan logic was not weakened or bypassed.
           "
           fi
 
