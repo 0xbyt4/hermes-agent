@@ -35,8 +35,8 @@ _HERMES_CORE_TOOLS = [
     "terminal", "process",
     # File manipulation
     "read_file", "write_file", "patch", "search_files",
-    # Vision + image generation
-    "vision_analyze", "image_generate",
+    # Vision + image generation + processing
+    "vision_analyze", "image_generate", "image_process",
     # MoA
     "mixture_of_agents",
     # Skills
@@ -82,8 +82,8 @@ TOOLSETS = {
     },
     
     "vision": {
-        "description": "Image analysis and vision tools",
-        "tools": ["vision_analyze"],
+        "description": "Image analysis, processing, and vision tools",
+        "tools": ["vision_analyze", "image_process"],
         "includes": []
     },
     
