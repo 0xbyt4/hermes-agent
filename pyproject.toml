@@ -51,6 +51,7 @@ matrix = ["matrix-nio[e2e]>=0.24.0"]
 cli = ["simple-term-menu"]
 tts-premium = ["elevenlabs"]
 voice = ["sounddevice>=0.4.6", "numpy>=1.24.0"]
+image = ["Pillow>=10.0"]
 pty = [
   "ptyprocess>=0.7.0; sys_platform != 'win32'",
   "pywinpty>=2.0.0; sys_platform == 'win32'",
