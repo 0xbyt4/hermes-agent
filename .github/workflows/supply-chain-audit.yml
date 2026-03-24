@@ -32,7 +32,7 @@ jobs:
           set -euo pipefail
 
           # Get the full diff (added lines only), excluding lock files
-          DIFF=$(git diff "$BASE".."$HEAD" -- . ':!uv.lock' ':!*.lock' ':!package-lock.json' ':!yarn.lock' || true)
+          DIFF=$(git diff "$BASE".."$HEAD" -- . ':!uv.lock' ':!*.lock' ':!package-lock.json' ':!yarn.lock' ':!.github/workflows/supply-chain-audit.yml' || true)
 
           # Get list of changed files
           CHANGED_FILES=$(git diff --name-only "$BASE".."$HEAD" || true)
@@ -43,6 +43,16 @@ jobs:
 
           FINDINGS=""
           CRITICAL=false
+
+          # If this workflow itself is modified, warn but don't pattern-scan it
+          # (it contains grep patterns for base64/exec/subprocess that would
+          # false-positive against itself).
+          if echo "$CHANGED_FILES" | grep -q 'supply-chain-audit\.yml$'; then
+            FINDINGS="${FINDINGS}
+          ### WARNING: Supply chain audit workflow modified
+          The audit workflow itself was changed. Review the diff manually to ensure scan logic was not weakened.
+          "
+          fi
 
           # Helper: sanitize text for safe embedding in PR comments.
           # Strips backticks, $(), and other shell metacharacters that could
@@ -441,6 +451,7 @@ jobs:
       # shell injection from attacker-controlled diff content.
       - name: Post warning comment
         if: steps.scan.outputs.found == 'true'
+        continue-on-error: true  # Fork PRs may lack comment permissions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
