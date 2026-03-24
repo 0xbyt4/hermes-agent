@@ -12,7 +12,10 @@ from unittest.mock import patch
 
 import pytest
 
-from PIL import Image, ImageDraw
+try:
+    from PIL import Image, ImageDraw
+except ImportError:
+    pytest.skip("Pillow not installed", allow_module_level=True)
 
 from tools.image_process_tool import (
     _ALLOWED_OUTPUT_FORMATS,
