@@ -8,87 +8,96 @@ permissions:
   pull-requests: write
   contents: read
 
+concurrency:
+  group: supply-chain-audit-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   scan:
     name: Scan PR for supply chain risks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
       - name: Scan diff for suspicious patterns
         id: scan
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
 
-          BASE="${{ github.event.pull_request.base.sha }}"
-          HEAD="${{ github.event.pull_request.head.sha }}"
-
-          # Get the full diff (added lines only)
+          # Get the full diff (added lines only), excluding lock files
           DIFF=$(git diff "$BASE".."$HEAD" -- . ':!uv.lock' ':!*.lock' ':!package-lock.json' ':!yarn.lock' || true)
+
+          # Get list of changed files
+          CHANGED_FILES=$(git diff --name-only "$BASE".."$HEAD" || true)
+
+          # Security-related files that are expected to reference sensitive paths
+          # (deny lists, guards, blocked-path configs). Exclude from sensitive-path warnings.
+          SECURITY_FILES="file_operations\.py|file_tools\.py|skills_guard\.py|approval\.py|memory_tool\.py|url_safety\.py"
 
           FINDINGS=""
           CRITICAL=false
 
+          # Helper: sanitize text for safe embedding in PR comments.
+          # Strips backticks, $(), and other shell metacharacters that could
+          # cause injection when interpolated into the gh pr comment body.
+          sanitize() {
+            sed 's/`//g; s/\$(/(/g; s/\${/{/g; s/\$[A-Za-z_]//g' | head -c 4000
+          }
+
+          # =================================================================
+          # CRITICAL CHECKS — these block the PR
+          # =================================================================
+
           # --- .pth files (auto-execute on Python startup) ---
-          PTH_FILES=$(git diff --name-only "$BASE".."$HEAD" | grep '\.pth$' || true)
+          PTH_FILES=$(echo "$CHANGED_FILES" | grep '\.pth$' || true)
           if [ -n "$PTH_FILES" ]; then
             CRITICAL=true
+            SAFE_PTH=$(echo "$PTH_FILES" | sanitize)
             FINDINGS="${FINDINGS}
-          ### 🚨 CRITICAL: .pth file added or modified
-          Python \`.pth\` files in \`site-packages/\` execute automatically when the interpreter starts — no import required. This is the exact mechanism used in the [litellm supply chain attack](https://github.com/BerriAI/litellm/issues/24512).
+          ### CRITICAL: .pth file added or modified
+          Python .pth files in site-packages/ execute automatically when the interpreter starts -- no import required. This is the exact mechanism used in the litellm supply chain attack.
 
-          **Files:**
-          \`\`\`
-          ${PTH_FILES}
-          \`\`\`
+          Files:
+          ${SAFE_PTH}
           "
           fi
 
-          # --- base64 + exec/eval combo (the litellm attack pattern) ---
+          # --- base64 + exec/eval (same line OR within 3-line window) ---
+          # Same-line combo (exact litellm pattern)
           B64_EXEC_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'base64\.(b64decode|decodebytes|urlsafe_b64decode)' | grep -iE 'exec\(|eval\(' | head -10 || true)
-          if [ -n "$B64_EXEC_HITS" ]; then
+          # Multi-line: base64 decode appears near exec/eval (within added lines)
+          # Extract line numbers of base64 decodes and exec/eval, check proximity
+          B64_LINES=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'base64\.(b64decode|decodebytes|urlsafe_b64decode)' | cut -d: -f1 || true)
+          EXEC_LINES=$(echo "$DIFF" | grep -n '^\+' | grep -E '(exec|eval|compile)\s*\(' | grep -v '^\+\s*#' | grep -v 're\.compile\|ast\.compile' | cut -d: -f1 || true)
+          MULTILINE_B64_EXEC=""
+          if [ -n "$B64_LINES" ] && [ -n "$EXEC_LINES" ]; then
+            for b64_line in $B64_LINES; do
+              for exec_line in $EXEC_LINES; do
+                distance=$(( exec_line - b64_line ))
+                abs_distance=${distance#-}
+                if [ "$abs_distance" -le 5 ]; then
+                  MULTILINE_B64_EXEC="base64 decode at line $b64_line, exec/eval at line $exec_line (distance: $distance lines)"
+                  break 2
+                fi
+              done
+            done
+          fi
+          if [ -n "$B64_EXEC_HITS" ] || [ -n "$MULTILINE_B64_EXEC" ]; then
             CRITICAL=true
+            SAFE_B64=$(echo "${B64_EXEC_HITS}${MULTILINE_B64_EXEC}" | sanitize)
             FINDINGS="${FINDINGS}
-          ### 🚨 CRITICAL: base64 decode + exec/eval combo
-          This is the exact pattern used in the [litellm supply chain attack](https://github.com/BerriAI/litellm/issues/24512) — base64-decoded strings passed to exec/eval to hide credential-stealing payloads.
+          ### CRITICAL: base64 decode + exec/eval combo
+          This is the exact pattern used in the litellm supply chain attack -- base64-decoded strings passed to exec/eval to hide credential-stealing payloads. Detected even when decode and exec are on separate lines.
 
-          **Matches:**
-          \`\`\`
-          ${B64_EXEC_HITS}
-          \`\`\`
-          "
-          fi
-
-          # --- base64 decode/encode (alone — legitimate uses exist) ---
-          B64_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'base64\.(b64decode|b64encode|decodebytes|encodebytes|urlsafe_b64decode)|atob\(|btoa\(|Buffer\.from\(.*base64' | head -20 || true)
-          if [ -n "$B64_HITS" ]; then
-            FINDINGS="${FINDINGS}
-          ### ⚠️ WARNING: base64 encoding/decoding detected
-          Base64 has legitimate uses (images, JWT, etc.) but is also commonly used to obfuscate malicious payloads. Verify the usage is appropriate.
-
-          **Matches (first 20):**
-          \`\`\`
-          ${B64_HITS}
-          \`\`\`
-          "
-          fi
-
-          # --- exec/eval with string arguments ---
-          EXEC_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -E '(exec|eval)\s*\(' | grep -v '^\+\s*#' | grep -v 'test_\|mock\|assert\|# ' | head -20 || true)
-          if [ -n "$EXEC_HITS" ]; then
-            FINDINGS="${FINDINGS}
-          ### ⚠️ WARNING: exec() or eval() usage
-          Dynamic code execution can hide malicious behavior, especially when combined with base64 or network fetches.
-
-          **Matches (first 20):**
-          \`\`\`
-          ${EXEC_HITS}
-          \`\`\`
+          Matches:
+          ${SAFE_B64}
           "
           fi
 
@@ -96,56 +105,320 @@ jobs:
           PROC_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -E 'subprocess\.(Popen|call|run)\s*\(' | grep -iE 'base64|decode|encode|\\x|chr\(' | head -10 || true)
           if [ -n "$PROC_HITS" ]; then
             CRITICAL=true
+            SAFE_PROC=$(echo "$PROC_HITS" | sanitize)
             FINDINGS="${FINDINGS}
-          ### 🚨 CRITICAL: subprocess with encoded/obfuscated command
+          ### CRITICAL: subprocess with encoded/obfuscated command
           Subprocess calls with encoded arguments are a strong indicator of payload execution.
 
-          **Matches:**
-          \`\`\`
-          ${PROC_HITS}
-          \`\`\`
+          Matches:
+          ${SAFE_PROC}
           "
           fi
 
-          # --- Network calls to non-standard domains ---
-          EXFIL_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'requests\.(post|put)\(|httpx\.(post|put)\(|urllib\.request\.urlopen' | grep -v '^\+\s*#' | grep -v 'test_\|mock\|assert' | head -10 || true)
+          # --- curl | bash / wget | sh (how Trivy CI was compromised) ---
+          CURL_PIPE_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'curl\s.*\|\s*(bash|sh|zsh|python|perl)|wget\s.*\|\s*(bash|sh|zsh|python|perl)' | grep -v '^\+\s*#' | head -10 || true)
+          if [ -n "$CURL_PIPE_HITS" ]; then
+            CRITICAL=true
+            SAFE_CURL=$(echo "$CURL_PIPE_HITS" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### CRITICAL: curl/wget piped to shell
+          Piping remote content directly to a shell interpreter is how the Trivy CI was compromised. Always download, verify hash, then execute.
+
+          Matches:
+          ${SAFE_CURL}
+          "
+          fi
+
+          # --- os.system / os.popen (alternative code execution) ---
+          OS_EXEC_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -E 'os\.(system|popen|popen2|popen3|popen4|execv|execve|execvp|execvpe|execl|execle|execlp|execlpe)\s*\(' | grep -v '^\+\s*#' | grep -v 'test_\|mock\|assert' | head -10 || true)
+          if [ -n "$OS_EXEC_HITS" ]; then
+            CRITICAL=true
+            SAFE_OS=$(echo "$OS_EXEC_HITS" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### CRITICAL: os.system/os.popen/os.exec* usage
+          Direct shell or process execution via os module. Use subprocess with explicit arguments instead.
+
+          Matches:
+          ${SAFE_OS}
+          "
+          fi
+
+          # --- .pyc / compiled bytecode files ---
+          PYC_FILES=$(echo "$CHANGED_FILES" | grep -E '\.(pyc|pyo|so|dll|dylib)$' || true)
+          if [ -n "$PYC_FILES" ]; then
+            CRITICAL=true
+            SAFE_PYC=$(echo "$PYC_FILES" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### CRITICAL: Compiled/binary files added
+          Pre-compiled Python bytecode (.pyc/.pyo) or native binaries (.so/.dll/.dylib) can contain arbitrary code invisible to text-based review.
+
+          Files:
+          ${SAFE_PYC}
+          "
+          fi
+
+          # =================================================================
+          # WARNING CHECKS — flagged for review but don't block
+          # =================================================================
+
+          # --- Dependency changes (pyproject.toml, requirements.txt, package.json) ---
+          DEP_FILES=$(echo "$CHANGED_FILES" | grep -E '(pyproject\.toml|requirements\.txt|requirements.*\.txt|package\.json|Pipfile)$' || true)
+          if [ -n "$DEP_FILES" ]; then
+            DEP_DIFF=$(git diff "$BASE".."$HEAD" -- $DEP_FILES | grep '^\+' | grep -iE '"[a-zA-Z].*[>=<]|install_requires|dependencies|cmdclass|entry.points|scripts' | grep -v '^\+\+\+' | head -20 || true)
+            if [ -n "$DEP_DIFF" ]; then
+              SAFE_DEP=$(echo "$DEP_DIFF" | sanitize)
+              FINDINGS="${FINDINGS}
+          ### WARNING: Dependency file changes
+          New or modified dependencies detected. Also check for cmdclass/entry_points/scripts changes which can execute code during install.
+
+          Changed files: $(echo $DEP_FILES | tr '\n' ' ')
+
+          Dependency changes (first 20):
+          ${SAFE_DEP}
+          "
+            fi
+
+            # Check for unpinned dependencies (no version constraint)
+            UNPINNED=$(git diff "$BASE".."$HEAD" -- $DEP_FILES | grep '^\+' | grep -E '"[a-zA-Z][a-zA-Z0-9_-]*",$' | grep -v '^\+\+\+' | head -10 || true)
+            if [ -n "$UNPINNED" ]; then
+              SAFE_UNPIN=$(echo "$UNPINNED" | sanitize)
+              FINDINGS="${FINDINGS}
+          ### WARNING: Unpinned dependencies added
+          Dependencies without version constraints accept any version, including malicious future releases.
+
+          Matches:
+          ${SAFE_UNPIN}
+          "
+            fi
+
+            # Check for URL-based dependencies (git+https, http:// in requirements.txt)
+            URL_DEPS=$(git diff "$BASE".."$HEAD" -- $DEP_FILES | grep '^\+' | grep -iE 'git\+https?://|https?://.*\.(tar\.gz|whl|zip)' | grep -v '^\+\+\+' | head -10 || true)
+            if [ -n "$URL_DEPS" ]; then
+              SAFE_URL=$(echo "$URL_DEPS" | sanitize)
+              FINDINGS="${FINDINGS}
+          ### WARNING: URL-based dependencies
+          Dependencies installed from URLs instead of PyPI/npm. Verify the source is trusted.
+
+          Matches:
+          ${SAFE_URL}
+          "
+            fi
+          fi
+
+          # --- base64 decode/encode (alone) ---
+          B64_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'base64\.(b64decode|b64encode|decodebytes|encodebytes|urlsafe_b64decode)|atob\(|btoa\(|Buffer\.from\(.*base64' | head -20 || true)
+          if [ -n "$B64_HITS" ]; then
+            SAFE_B64W=$(echo "$B64_HITS" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### WARNING: base64 encoding/decoding detected
+          Base64 has legitimate uses (images, JWT, etc.) but is also commonly used to obfuscate malicious payloads.
+
+          Matches (first 20):
+          ${SAFE_B64W}
+          "
+          fi
+
+          # --- exec/eval ---
+          EXEC_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -E '(exec|eval)\s*\(' | grep -v '^\+\s*#' | grep -v 'test_\|mock\|assert\|# ' | head -20 || true)
+          if [ -n "$EXEC_HITS" ]; then
+            SAFE_EXEC=$(echo "$EXEC_HITS" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### WARNING: exec() or eval() usage
+          Dynamic code execution can hide malicious behavior.
+
+          Matches (first 20):
+          ${SAFE_EXEC}
+          "
+          fi
+
+          # --- Dynamic imports (__import__, importlib) ---
+          DYN_IMPORT_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -E '__import__\s*\(|importlib\.(import_module|util\.spec_from)' | grep -v '^\+\s*#' | grep -v 'test_\|mock\|assert' | head -10 || true)
+          if [ -n "$DYN_IMPORT_HITS" ]; then
+            SAFE_DYN=$(echo "$DYN_IMPORT_HITS" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### WARNING: Dynamic import detected
+          __import__() and importlib can load arbitrary modules at runtime.
+
+          Matches:
+          ${SAFE_DYN}
+          "
+          fi
+
+          # --- ctypes / cffi (native code loading) ---
+          CTYPES_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'ctypes\.(CDLL|cdll|windll|oledll)|cffi\.FFI|ffi\.(dlopen|cdef)' | grep -v '^\+\s*#' | grep -v 'test_\|mock' | head -10 || true)
+          if [ -n "$CTYPES_HITS" ]; then
+            SAFE_CT=$(echo "$CTYPES_HITS" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### WARNING: Native code loading (ctypes/cffi)
+          Loading native shared libraries can execute arbitrary code.
+
+          Matches:
+          ${SAFE_CT}
+          "
+          fi
+
+          # --- Network exfiltration (expanded: socket, aiohttp, http.client) ---
+          EXFIL_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'requests\.(post|put)\(|httpx\.(post|put)\(|urllib\.request\.(urlopen|Request)|aiohttp\.ClientSession|socket\.(connect|send)|http\.client\.HTTP' | grep -v '^\+\s*#' | grep -v 'test_\|mock\|assert' | head -10 || true)
           if [ -n "$EXFIL_HITS" ]; then
+            SAFE_EXFIL=$(echo "$EXFIL_HITS" | sanitize)
             FINDINGS="${FINDINGS}
-          ### ⚠️ WARNING: Outbound network calls (POST/PUT)
-          Outbound POST/PUT requests in new code could be data exfiltration. Verify the destination URLs are legitimate.
+          ### WARNING: Outbound network calls
+          Outbound network requests could be data exfiltration. Verify destination URLs are legitimate.
 
-          **Matches (first 10):**
-          \`\`\`
-          ${EXFIL_HITS}
-          \`\`\`
+          Matches (first 10):
+          ${SAFE_EXFIL}
           "
           fi
 
-          # --- setup.py / setup.cfg install hooks ---
-          SETUP_HITS=$(git diff --name-only "$BASE".."$HEAD" | grep -E '(setup\.py|setup\.cfg|__init__\.pth|sitecustomize\.py|usercustomize\.py)$' || true)
+          # --- setup.py / startup hooks ---
+          SETUP_HITS=$(echo "$CHANGED_FILES" | grep -E '(setup\.py|setup\.cfg|__init__\.pth|sitecustomize\.py|usercustomize\.py|conftest\.py)$' || true)
           if [ -n "$SETUP_HITS" ]; then
+            SAFE_SETUP=$(echo "$SETUP_HITS" | sanitize)
             FINDINGS="${FINDINGS}
-          ### ⚠️ WARNING: Install hook files modified
+          ### WARNING: Install hook / startup files modified
           These files can execute code during package installation or interpreter startup.
 
-          **Files:**
-          \`\`\`
-          ${SETUP_HITS}
-          \`\`\`
+          Files:
+          ${SAFE_SETUP}
           "
           fi
 
-          # --- Compile/marshal/pickle (code object injection) ---
-          MARSHAL_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'marshal\.loads|pickle\.loads|compile\(' | grep -v '^\+\s*#' | grep -v 'test_\|re\.compile\|ast\.compile' | head -10 || true)
+          # --- Unsafe deserialization ---
+          MARSHAL_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'marshal\.loads|pickle\.loads|pickle\.load\b|shelve\.open|yaml\.load\(' | grep -v '^\+\s*#' | grep -v 'yaml\.safe_load' | head -10 || true)
           if [ -n "$MARSHAL_HITS" ]; then
+            SAFE_MARSHAL=$(echo "$MARSHAL_HITS" | sanitize)
             FINDINGS="${FINDINGS}
-          ### ⚠️ WARNING: marshal/pickle/compile usage
-          These can deserialize or construct executable code objects.
+          ### WARNING: Unsafe deserialization
+          marshal.loads, pickle.loads, and yaml.load (without SafeLoader) can execute arbitrary code.
 
-          **Matches:**
-          \`\`\`
-          ${MARSHAL_HITS}
-          \`\`\`
+          Matches:
+          ${SAFE_MARSHAL}
+          "
+          fi
+
+          # --- New executable files ---
+          NEW_EXEC=$(git diff "$BASE".."$HEAD" --diff-filter=A --name-only | while read f; do
+            if [ -f "$f" ] && [ -x "$f" ]; then echo "$f"; fi
+          done || true)
+          if [ -n "$NEW_EXEC" ]; then
+            SAFE_NEXEC=$(echo "$NEW_EXEC" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### WARNING: New executable files added
+          New files with execute permission.
+
+          Files:
+          ${SAFE_NEXEC}
+          "
+          fi
+
+          # --- GitHub Actions not pinned to SHA ---
+          GHA_FILES=$(echo "$CHANGED_FILES" | grep -E '\.github/workflows/.*\.yml$' || true)
+          if [ -n "$GHA_FILES" ]; then
+            UNPINNED_ACTIONS=$(git diff "$BASE".."$HEAD" -- $GHA_FILES | grep '^\+' | grep -E 'uses:\s+[^@]+@(v[0-9]|main|master|latest)' | grep -v '^\+\+\+' | head -10 || true)
+            if [ -n "$UNPINNED_ACTIONS" ]; then
+              SAFE_GHA=$(echo "$UNPINNED_ACTIONS" | sanitize)
+              FINDINGS="${FINDINGS}
+          ### WARNING: GitHub Actions not pinned to SHA
+          Actions should be pinned to a full commit SHA, not a mutable tag. Mutable tags can be overwritten by a compromised upstream.
+
+          Matches:
+          ${SAFE_GHA}
+          "
+            fi
+          fi
+
+          # --- Hardcoded secrets ---
+          SECRET_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE '(password|secret|token|api_key|private_key)\s*=\s*["\x27][^"\x27]{8,}' | grep -v '^\+\s*#' | grep -v 'test_\|mock\|example\|placeholder\|your[_-]\|REDACTED\|changeme' | head -10 || true)
+          if [ -n "$SECRET_HITS" ]; then
+            SAFE_SEC=$(echo "$SECRET_HITS" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### WARNING: Possible hardcoded secrets
+          Strings that look like hardcoded credentials were detected.
+
+          Matches:
+          ${SAFE_SEC}
+          "
+          fi
+
+          # --- Sensitive file paths (exclude known security guard files) ---
+          SENS_PATH_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE '\.ssh/|\.aws/|\.kube/|\.docker/|\.gnupg/|\.gitconfig|\.git-credentials|wallet\.dat|keystore/' | grep -v '^\+\s*#' | grep -vE "test_|mock|doc|README|SKILL\.md|${SECURITY_FILES}" | head -10 || true)
+          if [ -n "$SENS_PATH_HITS" ]; then
+            SAFE_SENS=$(echo "$SENS_PATH_HITS" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### WARNING: References to sensitive file paths
+          Code references paths commonly targeted by credential stealers. Verify these are for legitimate purposes (e.g., blocked-path lists).
+
+          Matches:
+          ${SAFE_SENS}
+          "
+          fi
+
+          # --- npm dependency and lifecycle script changes ---
+          NPM_FILES=$(echo "$CHANGED_FILES" | grep -E 'package\.json$' || true)
+          if [ -n "$NPM_FILES" ]; then
+            NPM_CHANGES=$(git diff "$BASE".."$HEAD" -- $NPM_FILES | grep '^\+' | grep -iE '"[a-zA-Z@].*":\s*"|preinstall|postinstall|prepare|prepublish' | grep -v '^\+\+\+\|"name"\|"version"\|"description"\|"license"\|"author"' | head -10 || true)
+            if [ -n "$NPM_CHANGES" ]; then
+              SAFE_NPM=$(echo "$NPM_CHANGES" | sanitize)
+              FINDINGS="${FINDINGS}
+          ### WARNING: npm package.json changes
+          Dependency or lifecycle script changes detected. npm lifecycle scripts (preinstall, postinstall) execute automatically on install.
+
+          Changes:
+          ${SAFE_NPM}
+          "
+            fi
+          fi
+
+          # --- systemd / cron persistence ---
+          PERSIST_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'systemd|\.service\b|ExecStart|WantedBy|crontab|croniter\.(.*install|.*write)' | grep -v '^\+\s*#' | grep -v 'test_\|mock\|doc\|README' | head -10 || true)
+          PERSIST_FILES=$(echo "$CHANGED_FILES" | grep -E '\.(service|timer|cron)$' || true)
+          if [ -n "$PERSIST_HITS" ] || [ -n "$PERSIST_FILES" ]; then
+            SAFE_PERSIST=$(echo "${PERSIST_HITS}${PERSIST_FILES}" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### WARNING: Persistence mechanism references
+          systemd services, cron jobs, or timer files can establish persistence.
+
+          Matches:
+          ${SAFE_PERSIST}
+          "
+          fi
+
+          # --- .gitmodules / .gitattributes (repo-level hooks) ---
+          GIT_HOOKS=$(echo "$CHANGED_FILES" | grep -E '(\.gitmodules|\.gitattributes|\.pre-commit-config\.yaml)$' || true)
+          if [ -n "$GIT_HOOKS" ]; then
+            SAFE_GIT=$(echo "$GIT_HOOKS" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### WARNING: Git config files modified
+          .gitmodules can add submodules from untrusted repos. .gitattributes filter/smudge/clean attributes execute commands on checkout. Pre-commit configs run hooks automatically.
+
+          Files:
+          ${SAFE_GIT}
+          "
+          fi
+
+          # --- Dockerfile / docker-compose changes ---
+          DOCKER_FILES=$(echo "$CHANGED_FILES" | grep -iE '(Dockerfile|docker-compose|\.dockerignore)' || true)
+          if [ -n "$DOCKER_FILES" ]; then
+            SAFE_DOCKER=$(echo "$DOCKER_FILES" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### WARNING: Docker files modified
+          Dockerfiles can execute arbitrary commands at build time.
+
+          Files:
+          ${SAFE_DOCKER}
+          "
+          fi
+
+          # --- Environment variable manipulation (hijack vectors) ---
+          ENV_HIJACK_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -iE 'PYTHONSTARTUP|PYTHONPATH|LD_PRELOAD|DYLD_INSERT_LIBRARIES|NODE_OPTIONS' | grep -v '^\+\s*#' | grep -v 'test_\|mock\|doc' | head -10 || true)
+          if [ -n "$ENV_HIJACK_HITS" ]; then
+            SAFE_ENV=$(echo "$ENV_HIJACK_HITS" | sanitize)
+            FINDINGS="${FINDINGS}
+          ### WARNING: Environment variable hijack vectors
+          PYTHONSTARTUP, PYTHONPATH, LD_PRELOAD, and NODE_OPTIONS can hijack process execution.
+
+          Matches:
+          ${SAFE_ENV}
           "
           fi
 
@@ -157,33 +430,39 @@ jobs:
             else
               echo "critical=false" >> "$GITHUB_OUTPUT"
             fi
-            # Write findings to a file (multiline env vars are fragile)
+            # Write sanitized findings to file
             echo "$FINDINGS" > /tmp/findings.md
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
             echo "critical=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Post findings as PR comment using a file-based approach to avoid
+      # shell injection from attacker-controlled diff content.
       - name: Post warning comment
         if: steps.scan.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          IS_CRITICAL: ${{ steps.scan.outputs.critical }}
         run: |
-          SEVERITY="⚠️ Supply Chain Risk Detected"
-          if [ "${{ steps.scan.outputs.critical }}" = "true" ]; then
-            SEVERITY="🚨 CRITICAL Supply Chain Risk Detected"
+          SEVERITY="Supply Chain Risk Detected"
+          if [ "$IS_CRITICAL" = "true" ]; then
+            SEVERITY="CRITICAL Supply Chain Risk Detected"
           fi
 
-          BODY="## ${SEVERITY}
+          {
+            echo "## ${SEVERITY}"
+            echo ""
+            echo "This PR contains patterns commonly associated with supply chain attacks. This does **not** mean the PR is malicious — but these patterns require careful human review before merging."
+            echo ""
+            cat /tmp/findings.md
+            echo ""
+            echo "---"
+            echo "*Automated scan by [supply-chain-audit](/.github/workflows/supply-chain-audit.yml). False positive? A maintainer can approve after manual review.*"
+          } > /tmp/comment.md
 
-          This PR contains patterns commonly associated with supply chain attacks. This does **not** mean the PR is malicious — but these patterns require careful human review before merging.
-
-          $(cat /tmp/findings.md)
-
-          ---
-          *Automated scan triggered by [supply-chain-audit](/.github/workflows/supply-chain-audit.yml). If this is a false positive, a maintainer can approve after manual review.*"
-
-          gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
 
       - name: Fail on critical findings
         if: steps.scan.outputs.critical == 'true'
