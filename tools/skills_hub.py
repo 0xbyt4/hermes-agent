@@ -443,7 +443,7 @@ class GitHubSource(SkillSource):
                 return None
             tree_data = resp.json()
             if tree_data.get("truncated"):
-                logger.debug("Git tree truncated for %s, falling back to Contents API", repo)
+                logger.info("Git tree truncated for %s (large repo), falling back to Contents API", repo)
                 return None
         except (httpx.HTTPError, ValueError):
             return None
@@ -469,12 +469,30 @@ class GitHubSource(SkillSource):
     def _download_directory_recursive(self, repo: str, path: str) -> Dict[str, str]:
         """Recursively download via Contents API (fallback)."""
         url = f"https://api.github.com/repos/{repo}/contents/{path.rstrip('/')}"
-        try:
-            resp = httpx.get(url, headers=self.auth.get_headers(), timeout=15, follow_redirects=True)
-            if resp.status_code != 200:
-                logger.debug("Contents API returned %d for %s/%s", resp.status_code, repo, path)
+        resp = None
+        for attempt in range(3):
+            try:
+                resp = httpx.get(url, headers=self.auth.get_headers(), timeout=15, follow_redirects=True)
+                if resp.status_code == 429:
+                    try:
+                        retry_after = min(int(resp.headers.get("retry-after", "5")), 15)
+                    except (ValueError, TypeError):
+                        retry_after = 5
+                    logger.debug(
+                        "GitHub rate-limited for %s/%s, retrying in %ds (attempt %d/3)",
+                        repo, path, retry_after, attempt + 1,
+                    )
+                    time.sleep(retry_after)
+                    continue
+                if resp.status_code != 200:
+                    logger.debug("Contents API returned %d for %s/%s", resp.status_code, repo, path)
+                    return {}
+                break
+            except httpx.HTTPError as exc:
+                logger.debug("Contents API request failed for %s/%s: %s", repo, path, exc)
                 return {}
-        except httpx.HTTPError:
+        else:
+            logger.warning("GitHub rate limit exhausted for %s/%s after 3 retries", repo, path)
             return {}
 
         entries = resp.json()
@@ -553,16 +571,32 @@ class GitHubSource(SkillSource):
     def _fetch_file_content(self, repo: str, path: str) -> Optional[str]:
         """Fetch a single file's content from GitHub."""
         url = f"https://api.github.com/repos/{repo}/contents/{path}"
-        try:
-            resp = httpx.get(
-                url,
-                headers={**self.auth.get_headers(), "Accept": "application/vnd.github.v3.raw"},
-                timeout=15, follow_redirects=True,
-            )
-            if resp.status_code == 200:
-                return resp.text
-        except httpx.HTTPError as e:
-            logger.debug("GitHub contents API fetch failed: %s", e)
+        for attempt in range(3):
+            try:
+                resp = httpx.get(
+                    url,
+                    headers={**self.auth.get_headers(), "Accept": "application/vnd.github.v3.raw"},
+                    timeout=15, follow_redirects=True,
+                )
+                if resp.status_code == 200:
+                    return resp.text
+                if resp.status_code == 429:
+                    try:
+                        retry_after = min(int(resp.headers.get("retry-after", "5")), 15)
+                    except (ValueError, TypeError):
+                        retry_after = 5
+                    logger.debug(
+                        "GitHub rate-limited fetching %s/%s, retrying in %ds (attempt %d/3)",
+                        repo, path, retry_after, attempt + 1,
+                    )
+                    time.sleep(retry_after)
+                    continue
+                logger.debug("GitHub contents API returned %d for %s/%s", resp.status_code, repo, path)
+                return None
+            except httpx.HTTPError as e:
+                logger.debug("GitHub contents API fetch failed: %s", e)
+                return None
+        logger.warning("GitHub rate limit exhausted fetching %s/%s", repo, path)
         return None
 
     def _read_cache(self, key: str) -> Optional[list]:
