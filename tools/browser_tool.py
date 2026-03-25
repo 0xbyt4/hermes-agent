@@ -70,6 +70,11 @@ try:
     from tools.website_policy import check_website_access
 except Exception:
     check_website_access = lambda url: None  # noqa: E731 — fail-open if policy module unavailable
+
+try:
+    from tools.url_safety import is_safe_url as _is_safe_url
+except Exception:
+    _is_safe_url = lambda url: True  # noqa: E731 — fail-open if safety module unavailable
 from tools.browser_providers.base import CloudBrowserProvider
 from tools.browser_providers.browserbase import BrowserbaseProvider
 from tools.browser_providers.browser_use import BrowserUseProvider
