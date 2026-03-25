@@ -55,6 +55,12 @@ def is_safe_url(url: str) -> bool:
     """
     try:
         parsed = urlparse(url)
+
+        # Explicitly allow only http and https — block javascript:, data:, file:, etc.
+        if parsed.scheme not in ("http", "https"):
+            logger.warning("Blocked request — unsupported URL scheme: %s", parsed.scheme)
+            return False
+
         hostname = (parsed.hostname or "").strip().lower()
         if not hostname:
             return False

@@ -1052,7 +1052,21 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
         data = result.get("data", {})
         title = data.get("title", "")
         final_url = data.get("url", url)
-        
+
+        # Re-validate final URL after redirects — Chromium follows redirects
+        # internally, so a public URL can 302 to a private/internal address.
+        if final_url and final_url != url and not _is_safe_url(final_url):
+            logger.warning("Navigation to %s redirected to blocked URL: %s", url, final_url)
+            # Close the session to prevent further interaction with the internal page
+            try:
+                _run_browser_command(effective_task_id, "close", [])
+            except Exception:
+                pass
+            return json.dumps({
+                "success": False,
+                "error": f"Blocked: navigation redirected to a private/internal address",
+            })
+
         response = {
             "success": True,
             "url": final_url,
