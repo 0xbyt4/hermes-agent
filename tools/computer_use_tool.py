@@ -347,37 +347,28 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     if action not in ALL_ACTIONS:
         return json.dumps({"error": f"Unknown action: {action}. Valid: {ALL_ACTIONS}"})
 
-    # Gate destructive actions behind user approval (same pattern as terminal_tool)
+    # Gate destructive actions behind user approval.
+    # Uses the same check_all_command_guards as terminal_tool —
+    # handles session/permanent allowlists, tirith, smart approval, yolo mode.
     if action in _DESTRUCTIVE_ACTIONS:
-        if not os.getenv("HERMES_YOLO_MODE"):
-            try:
-                from tools.approval import prompt_dangerous_approval, is_approved, approve_session, approve_permanent
-                _SESSION_KEY = os.getenv("HERMES_SESSION_ID", "default")
-                _PATTERN_KEY = "computer_use_actions"
-
-                # Check if already approved for this session
-                if not is_approved(_SESSION_KEY, _PATTERN_KEY):
-                    coord = args.get("coordinate", [])
-                    coord_str = f" at ({coord[0]}, {coord[1]})" if len(coord) == 2 else ""
-                    if action == "type":
-                        cmd_display = f"type '{args.get('text', '')[:50]}'"
-                    elif action == "key":
-                        cmd_display = f"key {args.get('key', args.get('text', ''))}"
-                    else:
-                        cmd_display = f"{action}{coord_str}"
-
-                    choice = prompt_dangerous_approval(
-                        cmd_display, "computer_use",
-                        approval_callback=_approval_callback,
-                    )
-                    if choice == "deny":
-                        return json.dumps({"error": f"Action '{action}' denied by user"})
-                    elif choice == "session":
-                        approve_session(_SESSION_KEY, _PATTERN_KEY)
-                    elif choice == "always":
-                        approve_permanent(_PATTERN_KEY)
-            except ImportError:
-                pass  # approval module unavailable
+        try:
+            from tools.approval import check_all_command_guards
+            coord = args.get("coordinate", [])
+            coord_str = f" at ({coord[0]}, {coord[1]})" if len(coord) == 2 else ""
+            if action == "type":
+                cmd_display = f"computer: type '{args.get('text', '')[:50]}'"
+            elif action == "key":
+                cmd_display = f"computer: key {args.get('key', args.get('text', ''))}"
+            else:
+                cmd_display = f"computer: {action}{coord_str}"
+            approval = check_all_command_guards(
+                cmd_display, "local",
+                approval_callback=_approval_callback,
+            )
+            if not approval["approved"]:
+                return json.dumps({"error": f"Action '{action}' denied by user"})
+        except ImportError:
+            pass  # approval module unavailable
 
     # Coordinate scaling: Screenshots are resized to logical resolution
     # (pyautogui coordinate space). If further downscaled beyond that,
