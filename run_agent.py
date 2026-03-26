@@ -6190,11 +6190,15 @@ class AIAgent:
             messages.append(tool_msg)
 
             if not self.quiet_mode:
+                # Use text summary for multimodal results (avoid printing base64)
+                _print_result = result_preview if _is_multimodal else function_result
+                if not isinstance(_print_result, str):
+                    _print_result = str(_print_result)[:200]
                 if self.verbose_logging:
                     print(f"  ✅ Tool {i} completed in {tool_duration:.2f}s")
-                    print(f"     Result: {function_result}")
+                    print(f"     Result: {_print_result}")
                 else:
-                    response_preview = function_result[:self.log_prefix_chars] + "..." if len(function_result) > self.log_prefix_chars else function_result
+                    response_preview = _print_result[:self.log_prefix_chars] + "..." if len(_print_result) > self.log_prefix_chars else _print_result
                     print(f"  ✅ Tool {i} completed in {tool_duration:.2f}s - {response_preview}")
 
             if self._interrupt_requested and i < len(assistant_message.tool_calls):
