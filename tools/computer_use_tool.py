@@ -385,6 +385,11 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     if action == "screenshot":
         try:
             b64_data, img_w, img_h, img_media = _take_screenshot()
+            # Save to file for gateway MEDIA: tag (sends image to Telegram/Discord)
+            ext = "jpg" if "jpeg" in img_media else "png"
+            screenshot_path = f"/tmp/hermes_screenshot.{ext}"
+            with open(screenshot_path, "wb") as f:
+                f.write(base64.b64decode(b64_data))
             return {
                 "_multimodal": True,
                 "content_blocks": [
@@ -397,7 +402,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
                         },
                     },
                 ],
-                "text_summary": f"Screenshot taken ({img_w}x{img_h})",
+                "text_summary": f"Screenshot taken ({img_w}x{img_h}) MEDIA:{screenshot_path}",
             }
         except Exception as e:
             logger.error("Screenshot failed: %s", e)
