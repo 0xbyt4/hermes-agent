@@ -6948,12 +6948,6 @@ class AIAgent:
                         if isinstance(getattr(self, "client", None), Mock):
                             _use_streaming = False
 
-                    # Disable streaming when computer_use is active — the
-                    # chat_completions streaming path cannot serialize native
-                    # Anthropic tool types (computer_20251124).
-                    if _use_streaming and "computer" in (self.valid_tool_names or set()):
-                        _use_streaming = False
-
                     if _use_streaming:
                         response = self._interruptible_streaming_api_call(
                             api_kwargs, on_first_delta=_stop_spinner
