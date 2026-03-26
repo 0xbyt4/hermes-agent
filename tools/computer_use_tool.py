@@ -58,6 +58,7 @@ ALL_ACTIONS = sorted(_DESTRUCTIVE_ACTIONS | _SAFE_ACTIONS)
 # ---------------------------------------------------------------------------
 
 _cached_screen_size: Optional[Tuple[int, int]] = None
+_cached_screenshot_size: Optional[Tuple[int, int]] = None  # Actual image dimensions sent to Claude
 
 
 def _get_screen_size() -> Tuple[int, int]:
@@ -149,6 +150,10 @@ def _take_screenshot() -> Tuple[str, int, int]:
         # Read and base64 encode
         with open(tmp_path, "rb") as f:
             data = base64.b64encode(f.read()).decode("ascii")
+
+        # Cache actual screenshot dimensions for native tool definition
+        global _cached_screenshot_size
+        _cached_screenshot_size = (img_w, img_h)
 
         return data, img_w, img_h
 
@@ -315,14 +320,20 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
         except ImportError:
             pass  # approval module unavailable — allow (matches terminal tool behavior)
 
-    # Scale coordinates from Claude's image space to actual screen
+    # Scale coordinates from Claude's image space to actual screen.
+    # Use cached screenshot dimensions (what Claude actually sees) for accuracy.
     actual_w, actual_h = _get_screen_size()
-    image_w, image_h, _ = _compute_scale(actual_w, actual_h)
+    if _cached_screenshot_size:
+        image_w, image_h = _cached_screenshot_size
+    else:
+        image_w, image_h, _ = _compute_scale(actual_w, actual_h)
+
+    def _scale_coord(x: int, y: int) -> Tuple[int, int]:
+        return scale_coordinates_to_screen(x, y, actual_w, actual_h, image_w, image_h)
 
     coordinate = args.get("coordinate")
     if coordinate and len(coordinate) == 2:
-        real_x, real_y = scale_coordinates_to_screen(
-            coordinate[0], coordinate[1],
+        real_x, real_y = _scale_coord(coordinate[0], coordinate[1])
             actual_w, actual_h, image_w, image_h,
         )
         args["coordinate"] = [real_x, real_y]
@@ -388,10 +399,15 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
 def get_native_tool_definition() -> Dict[str, Any]:
     """Return the native Anthropic computer use tool definition.
 
-    Called at API request time to include actual screen dimensions.
+    Uses cached screenshot dimensions if available (actual image size sent
+    to Claude), otherwise estimates from logical screen size. This ensures
+    the declared display size matches the actual screenshot pixels Claude sees.
     """
-    w, h = _get_screen_size()
-    image_w, image_h, _ = _compute_scale(w, h)
+    if _cached_screenshot_size:
+        image_w, image_h = _cached_screenshot_size
+    else:
+        w, h = _get_screen_size()
+        image_w, image_h, _ = _compute_scale(w, h)
     return {
         "type": "computer_20251124",
         "name": "computer",
