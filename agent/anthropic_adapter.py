@@ -151,7 +151,6 @@ def _forbids_sampling_params(model: str) -> bool:
 _COMMON_BETAS = [
     "interleaved-thinking-2025-05-14",
     "fine-grained-tool-streaming-2025-05-14",
-    "computer-use-2025-11-24",
 ]
 # MiniMax's Anthropic-compatible endpoints fail tool-use requests when
 # the fine-grained tool streaming beta is present.  Omit it so tool calls
@@ -162,6 +161,10 @@ _TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
 # significantly higher output token throughput on Opus 4.6 (~2.5x).
 # See https://platform.claude.com/docs/en/build-with-claude/fast-mode
 _FAST_MODE_BETA = "fast-mode-2026-02-01"
+
+# Beta header for computer use — only added when the toolset is active.
+# Kept separate from _COMMON_BETAS to avoid sending it on every request.
+COMPUTER_USE_BETA = "computer-use-2025-11-24"
 
 # Additional beta headers required for OAuth/subscription auth.
 # Matches what Claude Code (and pi-ai / OpenCode) send.
