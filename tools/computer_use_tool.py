@@ -386,9 +386,17 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
 
     for coord_key in ("coordinate", "start_coordinate", "end_coordinate"):
         coord = args.get(coord_key)
-        if coord and len(coord) == 2:
-            # Claude may send coordinates as strings — cast to int.
-            # pyautogui interprets string args as image filenames to search.
+        if not coord:
+            continue
+        # Claude may send coordinates as a JSON string "[89, 863]" instead of a list.
+        if isinstance(coord, str):
+            try:
+                coord = json.loads(coord)
+                args[coord_key] = coord
+            except (json.JSONDecodeError, ValueError):
+                continue
+        if isinstance(coord, (list, tuple)) and len(coord) == 2:
+            # Cast to int — pyautogui treats string args as image filenames.
             args[coord_key] = list(_scale_coord(int(coord[0]), int(coord[1])))
 
     # Execute the action
