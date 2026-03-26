@@ -4423,8 +4423,18 @@ class AIAgent:
 
             # Reset stale-stream timer for this attempt
             last_chunk_time["t"] = time.time()
-            # Use the Anthropic SDK's streaming context manager
-            with self._anthropic_client.messages.stream(**api_kwargs) as stream:
+            # Use beta API for streaming when native tools (computer_use) are present
+            tools = api_kwargs.get("tools", [])
+            _use_beta_stream = any(
+                isinstance(t, dict) and t.get("type", "").startswith("computer_")
+                for t in tools
+            )
+            _stream_ctx = (
+                self._anthropic_client.beta.messages.stream(**api_kwargs)
+                if _use_beta_stream
+                else self._anthropic_client.messages.stream(**api_kwargs)
+            )
+            with _stream_ctx as stream:
                 for event in stream:
                     if self._interrupt_requested:
                         break
