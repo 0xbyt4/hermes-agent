@@ -334,9 +334,15 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     coordinate = args.get("coordinate")
     if coordinate and len(coordinate) == 2:
         real_x, real_y = _scale_coord(coordinate[0], coordinate[1])
-            actual_w, actual_h, image_w, image_h,
-        )
         args["coordinate"] = [real_x, real_y]
+
+    # Scale drag coordinates too
+    start_coord = args.get("start_coordinate")
+    if start_coord and len(start_coord) == 2:
+        args["start_coordinate"] = list(_scale_coord(start_coord[0], start_coord[1]))
+    end_coord = args.get("end_coordinate")
+    if end_coord and len(end_coord) == 2:
+        args["end_coordinate"] = list(_scale_coord(end_coord[0], end_coord[1]))
 
     # Execute the action
     if action == "screenshot":
