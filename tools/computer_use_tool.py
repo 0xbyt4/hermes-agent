@@ -468,7 +468,9 @@ _COMPUTER_USE_SCHEMA = {
     "description": (
         "Control the computer desktop — take screenshots, click, type, scroll, "
         "and use keyboard shortcuts. Use 'screenshot' action first to see the "
-        "current screen, then interact with elements by their coordinates."
+        "current screen, then interact with elements by their coordinates. "
+        "When sharing screenshots with the user, include MEDIA:<path> from the "
+        "screenshot result's text_summary in your response to deliver it as an image."
     ),
     "parameters": {
         "type": "object",

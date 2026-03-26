@@ -1033,7 +1033,13 @@ def convert_messages_to_anthropic(
             # for compatibility with trajectory/session code paths.
             multimodal_blocks = m.get("_anthropic_content_blocks")
             if isinstance(multimodal_blocks, list) and multimodal_blocks:
-                result_content = multimodal_blocks
+                # Include text content alongside image blocks so Claude sees
+                # the MEDIA: path and can include it in its response for gateway.
+                text_content = content if isinstance(content, str) and content.strip() else None
+                if text_content:
+                    result_content = [{"type": "text", "text": text_content}] + multimodal_blocks
+                else:
+                    result_content = multimodal_blocks
             elif isinstance(content, str):
                 result_content = content
             else:
