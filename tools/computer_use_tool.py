@@ -34,6 +34,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Approval callback — registered by CLI at startup for prompt_toolkit integration.
+# Same pattern as terminal_tool._approval_callback.
+_approval_callback = None
+
+
+def set_approval_callback(cb):
+    """Register a callback for computer_use approval prompts (used by CLI)."""
+    global _approval_callback
+    _approval_callback = cb
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -135,7 +146,20 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
             elif "pixelHeight" in line:
                 img_h = int(line.split(":")[-1].strip())
 
-        # Downscale if needed
+        # Resize to logical resolution (pyautogui coordinate space).
+        # screencapture captures at physical/Retina pixels (e.g. 2940x1912)
+        # but pyautogui works in logical points (e.g. 1470x956).
+        # Resizing to logical ensures Claude's coordinates map 1:1 to
+        # pyautogui without any scaling math.
+        logical_w, logical_h = _get_screen_size()
+        if img_w != logical_w or img_h != logical_h:
+            subprocess.run(
+                ["sips", "--resampleWidth", str(logical_w), tmp_path],
+                capture_output=True, timeout=10,
+            )
+            img_w, img_h = logical_w, logical_h
+
+        # Further downscale if logical resolution exceeds Anthropic's max
         long_edge = max(img_w, img_h)
         if long_edge > _MAX_SCREENSHOT_EDGE:
             scale = _MAX_SCREENSHOT_EDGE / long_edge
@@ -323,12 +347,11 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     if action not in ALL_ACTIONS:
         return json.dumps({"error": f"Unknown action: {action}. Valid: {ALL_ACTIONS}"})
 
-    # Gate destructive actions behind user approval
+    # Gate destructive actions behind user approval (same pattern as terminal_tool)
     if action in _DESTRUCTIVE_ACTIONS:
-        approval_mode = os.environ.get("HERMES_YOLO_MODE") or ""
-        if not approval_mode:
+        if not os.getenv("HERMES_YOLO_MODE"):
             try:
-                from tools.approval import prompt_dangerous_approval
+                from tools.approval import prompt_dangerous_approval, is_approved, approve_session
                 coord = args.get("coordinate", [])
                 coord_str = f" at ({coord[0]}, {coord[1]})" if len(coord) == 2 else ""
                 if action == "type":
@@ -337,35 +360,41 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
                     cmd_display = f"key {args.get('key', args.get('text', ''))}"
                 else:
                     cmd_display = f"{action}{coord_str}"
-                choice = prompt_dangerous_approval(cmd_display, "computer_use action")
-                if choice == "deny":
-                    return json.dumps({"error": f"Action '{action}' denied by user"})
-            except (ImportError, Exception):
-                pass  # approval module unavailable — allow
 
-    # Scale coordinates from Claude's image space to actual screen.
-    # Use cached screenshot dimensions (what Claude actually sees) for accuracy.
+                # Check session/permanent allowlist first
+                if not is_approved(cmd_display):
+                    choice = prompt_dangerous_approval(
+                        cmd_display, "computer_use action",
+                        approval_callback=_approval_callback,
+                    )
+                    if choice == "deny":
+                        return json.dumps({"error": f"Action '{action}' denied by user"})
+                    if choice == "session":
+                        approve_session(cmd_display)
+                    # 'once' and 'always' handled by approval.py internals
+            except ImportError:
+                pass  # approval module unavailable
+
+    # Coordinate scaling: Screenshots are resized to logical resolution
+    # (pyautogui coordinate space). If further downscaled beyond that,
+    # we need to scale back up. Otherwise coordinates are 1:1.
     actual_w, actual_h = _get_screen_size()
     if _cached_screenshot_size:
         image_w, image_h = _cached_screenshot_size
     else:
-        image_w, image_h, _ = _compute_scale(actual_w, actual_h)
+        image_w, image_h = actual_w, actual_h
+
+    needs_scaling = (image_w != actual_w or image_h != actual_h)
 
     def _scale_coord(x: int, y: int) -> Tuple[int, int]:
+        if not needs_scaling:
+            return int(x), int(y)
         return scale_coordinates_to_screen(x, y, actual_w, actual_h, image_w, image_h)
 
-    coordinate = args.get("coordinate")
-    if coordinate and len(coordinate) == 2:
-        real_x, real_y = _scale_coord(coordinate[0], coordinate[1])
-        args["coordinate"] = [real_x, real_y]
-
-    # Scale drag coordinates too
-    start_coord = args.get("start_coordinate")
-    if start_coord and len(start_coord) == 2:
-        args["start_coordinate"] = list(_scale_coord(start_coord[0], start_coord[1]))
-    end_coord = args.get("end_coordinate")
-    if end_coord and len(end_coord) == 2:
-        args["end_coordinate"] = list(_scale_coord(end_coord[0], end_coord[1]))
+    for coord_key in ("coordinate", "start_coordinate", "end_coordinate"):
+        coord = args.get(coord_key)
+        if coord and len(coord) == 2:
+            args[coord_key] = list(_scale_coord(coord[0], coord[1]))
 
     # Execute the action
     if action == "screenshot":
