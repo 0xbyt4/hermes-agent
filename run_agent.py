@@ -6123,9 +6123,15 @@ class AIAgent:
                 _content_blocks = function_result.get("content_blocks", [])
                 result_preview = _text_summary
                 _is_error_result = False
+                # Store multimodal content blocks in a separate key so the
+                # standard "content" remains a string. This prevents crashes
+                # in trajectory conversion, session DB, and other code paths
+                # that assume content is always a string. The Anthropic
+                # adapter reads _anthropic_content_blocks when present.
                 tool_msg = {
                     "role": "tool",
-                    "content": _content_blocks,
+                    "content": _text_summary or "(screenshot taken)",
+                    "_anthropic_content_blocks": _content_blocks,
                     "tool_call_id": tool_call.id,
                 }
             else:

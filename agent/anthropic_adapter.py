@@ -1028,10 +1028,12 @@ def convert_messages_to_anthropic(
 
         if role == "tool":
             # Sanitize tool_use_id and ensure non-empty content.
-            # Support multimodal tool results (list of content blocks with images)
-            # used by computer_use tool for screenshot results.
-            if isinstance(content, list) and content and isinstance(content[0], dict):
-                result_content = content  # Already Anthropic content blocks
+            # Check for multimodal content blocks (computer_use screenshots).
+            # Stored in _anthropic_content_blocks to keep "content" as a string
+            # for compatibility with trajectory/session code paths.
+            multimodal_blocks = m.get("_anthropic_content_blocks")
+            if isinstance(multimodal_blocks, list) and multimodal_blocks:
+                result_content = multimodal_blocks
             elif isinstance(content, str):
                 result_content = content
             else:
