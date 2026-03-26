@@ -93,8 +93,11 @@ def _supports_adaptive_thinking(model: str) -> bool:
 _COMMON_BETAS = [
     "interleaved-thinking-2025-05-14",
     "fine-grained-tool-streaming-2025-05-14",
-    "computer-use-2025-11-24",
 ]
+
+# Beta header for computer use — only added when the toolset is active.
+# Kept separate from _COMMON_BETAS to avoid sending it on every request.
+COMPUTER_USE_BETA = "computer-use-2025-11-24"
 
 # Additional beta headers required for OAuth/subscription auth.
 # Matches what Claude Code (and pi-ai / OpenCode) send.
