@@ -98,9 +98,14 @@ class TestActionExecution:
 
     def test_type_text(self):
         from tools.computer_use_tool import _execute_action
-        result = _execute_action("type", {"text": "hello world"})
-        self.mock_pag.write.assert_called_once_with("hello world", interval=0.02)
-        assert "typed" in result
+        from unittest.mock import patch as _patch
+        with _patch("subprocess.run") as mock_run:
+            result = _execute_action("type", {"text": "hello world"})
+            # Type uses clipboard paste: pbcopy + Cmd+V
+            mock_run.assert_called_once()
+            assert mock_run.call_args[0][0] == ["pbcopy"]
+            self.mock_pag.hotkey.assert_called_once_with("command", "v")
+            assert "typed" in result
 
     def test_key_combo(self):
         from tools.computer_use_tool import _execute_action
@@ -149,7 +154,7 @@ class TestHandleComputerUse:
         parsed = json.loads(result)
         assert "error" in parsed
 
-    @patch("tools.computer_use_tool._take_screenshot", return_value=("base64data", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     def test_screenshot_returns_multimodal(self, _size, _screenshot):
         from tools.computer_use_tool import handle_computer_use
@@ -157,8 +162,9 @@ class TestHandleComputerUse:
         assert isinstance(result, dict)
         assert result["_multimodal"] is True
         assert result["content_blocks"][0]["type"] == "image"
-        assert result["content_blocks"][0]["source"]["data"] == "base64data"
+        assert result["content_blocks"][0]["source"]["data"] == "AAAA"
         assert result["content_blocks"][0]["source"]["media_type"] == "image/jpeg"
+        assert "MEDIA:" in result["text_summary"]
 
 
 class TestRequirementsCheck:
