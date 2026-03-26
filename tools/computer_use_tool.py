@@ -49,7 +49,7 @@ _DESTRUCTIVE_ACTIONS = frozenset({
 })
 
 # Actions that are read-only
-_SAFE_ACTIONS = frozenset({"screenshot", "mouse_move", "wait", "zoom"})
+_SAFE_ACTIONS = frozenset({"screenshot", "mouse_move", "wait"})
 
 ALL_ACTIONS = sorted(_DESTRUCTIVE_ACTIONS | _SAFE_ACTIONS)
 
