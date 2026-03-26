@@ -136,6 +136,10 @@ DANGEROUS_PATTERNS = [
     # a script is first made executable then immediately run. The script
     # content may contain dangerous commands that individual patterns miss.
     (r'\bchmod\s+\+x\b.*[;&|]+\s*\./', "chmod +x followed by immediate execution"),
+    # Computer use — mouse/keyboard actions control the physical desktop
+    (r'^computer:\s*(left_click|right_click|double_click|triple_click|middle_click|scroll|left_click_drag)', "computer use: mouse action"),
+    (r'^computer:\s*type\b', "computer use: keyboard input"),
+    (r'^computer:\s*key\b', "computer use: keyboard shortcut"),
 ]
 
 
