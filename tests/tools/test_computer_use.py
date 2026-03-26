@@ -167,6 +167,121 @@ class TestHandleComputerUse:
         assert "MEDIA:" in result["text_summary"]
 
 
+class TestCoordinateParsing:
+    """Test JSON string coordinate parsing."""
+
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
+    @patch("tools.computer_use_tool._cached_screenshot_size", (1024, 768))
+    def test_string_coordinate_parsed(self, _size, _screenshot):
+        """Claude sometimes sends coordinates as JSON string '[89, 863]'."""
+        from tools.computer_use_tool import handle_computer_use
+        with patch.dict("sys.modules", {"pyautogui": MagicMock()}):
+            result = handle_computer_use({"action": "left_click", "coordinate": "[500, 300]"})
+            parsed = json.loads(result)
+            assert parsed.get("success") is True
+
+    @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
+    @patch("tools.computer_use_tool._cached_screenshot_size", (1024, 768))
+    def test_string_list_coordinate_parsed(self, _size):
+        """Coordinates as list of strings ['500', '300']."""
+        from tools.computer_use_tool import handle_computer_use
+        with patch.dict("sys.modules", {"pyautogui": MagicMock()}):
+            result = handle_computer_use({"action": "left_click", "coordinate": ["500", "300"]})
+            parsed = json.loads(result)
+            assert parsed.get("success") is True
+
+
+class TestActionResults:
+    """Test that actions return correct result format."""
+
+    @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
+    @patch("tools.computer_use_tool._cached_screenshot_size", (1024, 768))
+    def test_click_returns_json_not_multimodal(self, _size):
+        """Non-screenshot actions return JSON string, not multimodal dict."""
+        from tools.computer_use_tool import handle_computer_use
+        with patch.dict("sys.modules", {"pyautogui": MagicMock()}):
+            result = handle_computer_use({"action": "left_click", "coordinate": [500, 300]})
+            assert isinstance(result, str)
+            parsed = json.loads(result)
+            assert parsed.get("success") is True
+
+    @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
+    @patch("tools.computer_use_tool._cached_screenshot_size", (1024, 768))
+    def test_type_empty_text_returns_error(self, _size):
+        """Type with empty text should return error."""
+        from tools.computer_use_tool import handle_computer_use
+        mock_pag = MagicMock()
+        mock_pag.FAILSAFE = True
+        with patch.dict("sys.modules", {"pyautogui": mock_pag}):
+            result = handle_computer_use({"action": "type", "text": ""})
+            parsed = json.loads(result)
+            assert "error" in parsed.get("status", "")
+
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
+    def test_screenshot_saves_file(self, _size, _screenshot):
+        """Screenshot should save to /tmp/hermes_screenshot.jpg."""
+        import os
+        from tools.computer_use_tool import handle_computer_use
+        result = handle_computer_use({"action": "screenshot"})
+        assert isinstance(result, dict)
+        assert os.path.exists("/tmp/hermes_screenshot.jpg")
+
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
+    def test_screenshot_media_tag_has_correct_path(self, _size, _screenshot):
+        """MEDIA: tag should contain /tmp/hermes_screenshot.jpg."""
+        from tools.computer_use_tool import handle_computer_use
+        result = handle_computer_use({"action": "screenshot"})
+        assert "MEDIA:/tmp/hermes_screenshot.jpg" in result["text_summary"]
+
+
+class TestDragCoordinates:
+    """Test drag action coordinate handling."""
+
+    @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
+    @patch("tools.computer_use_tool._cached_screenshot_size", (1024, 768))
+    def test_drag_coordinates_scaled(self, _size):
+        """start_coordinate and end_coordinate should be parsed and scaled."""
+        from tools.computer_use_tool import handle_computer_use
+        mock_pag = MagicMock()
+        mock_pag.FAILSAFE = True
+        with patch.dict("sys.modules", {"pyautogui": mock_pag}):
+            result = handle_computer_use({
+                "action": "left_click_drag",
+                "coordinate": [100, 200],
+                "start_coordinate": [100, 200],
+                "end_coordinate": [400, 500],
+            })
+            parsed = json.loads(result)
+            assert parsed.get("success") is True
+            mock_pag.moveTo.assert_called()
+            mock_pag.mouseDown.assert_called_once()
+            mock_pag.mouseUp.assert_called_once()
+
+
+class TestScrollDirection:
+    """Test scroll direction handling."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_pyautogui(self):
+        self.mock_pag = MagicMock()
+        self.mock_pag.FAILSAFE = True
+        with patch.dict("sys.modules", {"pyautogui": self.mock_pag}):
+            yield
+
+    def test_scroll_up_positive(self):
+        from tools.computer_use_tool import _execute_action
+        _execute_action("scroll", {"scroll_direction": "up", "scroll_amount": 3})
+        self.mock_pag.scroll.assert_called_once_with(3)
+
+    def test_scroll_down_negative(self):
+        from tools.computer_use_tool import _execute_action
+        _execute_action("scroll", {"scroll_direction": "down", "scroll_amount": 3})
+        self.mock_pag.scroll.assert_called_once_with(-3)
+
+
 class TestRequirementsCheck:
     """Test platform requirements detection."""
 
