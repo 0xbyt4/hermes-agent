@@ -385,8 +385,10 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
         try:
             b64_data, img_w, img_h, img_media = _take_screenshot()
             # Save to file for gateway MEDIA: tag (sends image to Telegram/Discord)
+            # Use session-unique path to avoid race between concurrent gateway sessions
+            import uuid as _uuid
             ext = "jpg" if "jpeg" in img_media else "png"
-            screenshot_path = f"/tmp/hermes_screenshot.{ext}"
+            screenshot_path = f"/tmp/hermes_screenshot_{_uuid.uuid4().hex[:8]}.{ext}"
             with open(screenshot_path, "wb") as f:
                 f.write(base64.b64decode(b64_data))
             return {
