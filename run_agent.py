@@ -4060,8 +4060,10 @@ class AIAgent:
         # Use beta API when native tools (computer_use) are present —
         # the standard messages.create() rejects non-function tool types.
         tools = api_kwargs.get("tools", [])
+        # Detect any non-standard tool type (computer_use, text_editor, bash, etc.)
+        _STANDARD_TYPES = {None, "", "function"}
         has_native = any(
-            isinstance(t, dict) and t.get("type", "").startswith("computer_")
+            isinstance(t, dict) and t.get("type") not in _STANDARD_TYPES
             for t in tools
         )
         if has_native:
@@ -4425,8 +4427,9 @@ class AIAgent:
             last_chunk_time["t"] = time.time()
             # Use beta API for streaming when native tools (computer_use) are present
             tools = api_kwargs.get("tools", [])
+            _STANDARD_TYPES = {None, "", "function"}
             _use_beta_stream = any(
-                isinstance(t, dict) and t.get("type", "").startswith("computer_")
+                isinstance(t, dict) and t.get("type") not in _STANDARD_TYPES
                 for t in tools
             )
             _stream_ctx = (
