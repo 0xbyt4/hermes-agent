@@ -379,36 +379,16 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             logger.error("Screenshot failed: %s", e)
             return json.dumps({"error": f"Screenshot failed: {e}"})
 
-    # Execute action, then take a follow-up screenshot
+    # Execute the action — no auto-screenshot. Claude will send a
+    # separate 'screenshot' action when it wants to see the result.
+    # This avoids doubling token/transfer cost on every interaction.
     try:
         status = _execute_action(action, args)
     except Exception as e:
         logger.error("Action %s failed: %s", action, e)
         return json.dumps({"error": f"Action '{action}' failed: {e}"})
 
-    # Brief pause for UI to update, then screenshot
-    time.sleep(0.3)
-
-    try:
-        b64_data, img_w, img_h = _take_screenshot()
-        return {
-            "_multimodal": True,
-            "content_blocks": [
-                {"type": "text", "text": status},
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": img_media,
-                        "data": b64_data,
-                    },
-                },
-            ],
-            "text_summary": status,
-        }
-    except Exception:
-        # Screenshot failed after action — return text-only result
-        return json.dumps({"success": True, "status": status})
+    return json.dumps({"success": True, "status": status})
 
 
 # ---------------------------------------------------------------------------
