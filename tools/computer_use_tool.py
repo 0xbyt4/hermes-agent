@@ -298,9 +298,25 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     if action not in ALL_ACTIONS:
         return json.dumps({"error": f"Unknown action: {action}. Valid: {ALL_ACTIONS}"})
 
+    # Gate destructive actions behind user approval
+    if action in _DESTRUCTIVE_ACTIONS:
+        try:
+            from tools.approval import prompt_dangerous_approval
+            desc = f"computer_use: {action}"
+            if action == "type":
+                desc += f" '{args.get('text', '')[:50]}'"
+            elif action == "key":
+                desc += f" {args.get('key', args.get('text', ''))}"
+            elif args.get("coordinate"):
+                desc += f" at ({args['coordinate'][0]}, {args['coordinate'][1]})"
+            approved = prompt_dangerous_approval(desc, "computer_use")
+            if not approved:
+                return json.dumps({"error": f"Action '{action}' denied by user"})
+        except ImportError:
+            pass  # approval module unavailable — allow (matches terminal tool behavior)
+
     # Scale coordinates from Claude's image space to actual screen
     actual_w, actual_h = _get_screen_size()
-    _, image_h, _ = _compute_scale(actual_w, actual_h)
     image_w, image_h, _ = _compute_scale(actual_w, actual_h)
 
     coordinate = args.get("coordinate")
