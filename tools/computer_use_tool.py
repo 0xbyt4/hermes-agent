@@ -323,22 +323,23 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     if action not in ALL_ACTIONS:
         return json.dumps({"error": f"Unknown action: {action}. Valid: {ALL_ACTIONS}"})
 
-    # Gate destructive actions behind user approval
+    # Gate destructive actions behind user approval (same system as terminal tool)
     if action in _DESTRUCTIVE_ACTIONS:
         try:
-            from tools.approval import prompt_dangerous_approval
-            desc = f"computer_use: {action}"
+            from tools.approval import check_all_command_guards
+            coord = args.get("coordinate", [])
+            coord_str = f" at ({coord[0]}, {coord[1]})" if len(coord) == 2 else ""
             if action == "type":
-                desc += f" '{args.get('text', '')[:50]}'"
+                cmd_str = f"computer: type '{args.get('text', '')[:50]}'"
             elif action == "key":
-                desc += f" {args.get('key', args.get('text', ''))}"
-            elif args.get("coordinate"):
-                desc += f" at ({args['coordinate'][0]}, {args['coordinate'][1]})"
-            approved = prompt_dangerous_approval(desc, "computer_use")
-            if not approved:
+                cmd_str = f"computer: key {args.get('key', args.get('text', ''))}"
+            else:
+                cmd_str = f"computer: {action}{coord_str}"
+            result = check_all_command_guards(cmd_str, "computer_use")
+            if result.get("action") == "deny":
                 return json.dumps({"error": f"Action '{action}' denied by user"})
-        except ImportError:
-            pass  # approval module unavailable — allow (matches terminal tool behavior)
+        except (ImportError, Exception):
+            pass  # approval module unavailable or error — allow
 
     # Scale coordinates from Claude's image space to actual screen.
     # Use cached screenshot dimensions (what Claude actually sees) for accuracy.
