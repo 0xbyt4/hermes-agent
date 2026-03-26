@@ -151,6 +151,7 @@ def _forbids_sampling_params(model: str) -> bool:
 _COMMON_BETAS = [
     "interleaved-thinking-2025-05-14",
     "fine-grained-tool-streaming-2025-05-14",
+    "computer-use-2025-11-24",
 ]
 # MiniMax's Anthropic-compatible endpoints fail tool-use requests when
 # the fine-grained tool streaming beta is present.  Omit it so tool calls
@@ -1070,8 +1071,15 @@ def convert_messages_to_anthropic(
             continue
 
         if role == "tool":
-            # Sanitize tool_use_id and ensure non-empty content
-            result_content = content if isinstance(content, str) else json.dumps(content)
+            # Sanitize tool_use_id and ensure non-empty content.
+            # Support multimodal tool results (list of content blocks with images)
+            # used by computer_use tool for screenshot results.
+            if isinstance(content, list) and content and isinstance(content[0], dict):
+                result_content = content  # Already Anthropic content blocks
+            elif isinstance(content, str):
+                result_content = content
+            else:
+                result_content = json.dumps(content) if content else "(no output)"
             if not result_content:
                 result_content = "(no output)"
             tool_result = {
@@ -1282,6 +1290,7 @@ def build_anthropic_kwargs(
     context_length: Optional[int] = None,
     base_url: str | None = None,
     fast_mode: bool = False,
+    native_tools: Optional[List[Dict]] = None,
 ) -> Dict[str, Any]:
     """Build kwargs for anthropic.messages.create().
 
@@ -1384,6 +1393,11 @@ def build_anthropic_kwargs(
 
     if system:
         kwargs["system"] = system
+
+    # Append native Anthropic tool types (e.g. computer_use) that bypass
+    # the OpenAI-to-Anthropic conversion — they use Anthropic's own format.
+    if native_tools:
+        anthropic_tools.extend(native_tools)
 
     if anthropic_tools:
         kwargs["tools"] = anthropic_tools

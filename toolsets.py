@@ -90,6 +90,12 @@ TOOLSETS = {
         "tools": ["image_generate"],
         "includes": []
     },
+
+    "computer_use": {
+        "description": "Desktop control via screenshots, mouse, and keyboard (macOS, Anthropic only)",
+        "tools": ["computer"],
+        "includes": []
+    },
     
     "terminal": {
         "description": "Terminal/command execution and process management tools",

@@ -7134,6 +7134,16 @@ class AIAgent:
                     content[-1]["cache_control"] = {"type": "ephemeral"}
                 break
 
+    def _get_native_anthropic_tools(self) -> Optional[list]:
+        """Build native Anthropic tool definitions (computer_use) if enabled."""
+        if "computer" not in self.valid_tool_names:
+            return None
+        try:
+            from tools.computer_use_tool import get_native_tool_definition
+            return [get_native_tool_definition()]
+        except Exception:
+            return None
+
     def _build_api_kwargs(self, api_messages: list) -> dict:
         """Build the keyword arguments dict for the active API mode."""
         if self.api_mode == "anthropic_messages":
@@ -7161,6 +7171,7 @@ class AIAgent:
                 context_length=ctx_len,
                 base_url=getattr(self, "_anthropic_base_url", None),
                 fast_mode=(self.request_overrides or {}).get("speed") == "fast",
+                native_tools=self._get_native_anthropic_tools(),
             )
 
         # AWS Bedrock native Converse API — bypasses the OpenAI client entirely.
@@ -8714,13 +8725,50 @@ class AIAgent:
                     logger.error("handle_function_call raised for %s: %s", function_name, tool_error, exc_info=True)
                 tool_duration = time.time() - tool_start_time
 
-            result_preview = function_result if self.verbose_logging else (
-                function_result[:200] if len(function_result) > 200 else function_result
-            )
+            # Handle multimodal tool results (e.g. computer_use screenshots).
+            # These return a dict with _multimodal flag and content_blocks list.
+            _is_multimodal = isinstance(function_result, dict) and function_result.get("_multimodal")
+            if _is_multimodal:
+                _text_summary = function_result.get("text_summary", "")
+                _content_blocks = function_result.get("content_blocks", [])
+                result_preview = _text_summary
+                _is_error_result = False
+                tool_msg = {
+                    "role": "tool",
+                    "content": _content_blocks,
+                    "tool_call_id": tool_call.id,
+                }
+            else:
+                if not isinstance(function_result, str):
+                    function_result = json.dumps(function_result) if function_result else ""
 
-            # Log tool errors to the persistent error log so [error] tags
-            # in the UI always have a corresponding detailed entry on disk.
-            _is_error_result, _ = _detect_tool_failure(function_name, function_result)
+                result_preview = function_result if self.verbose_logging else (
+                    function_result[:200] if len(function_result) > 200 else function_result
+                )
+
+                # Log tool errors to the persistent error log so [error] tags
+                # in the UI always have a corresponding detailed entry on disk.
+                _is_error_result, _ = _detect_tool_failure(function_name, function_result)
+
+                # Guard against tools returning absurdly large content that would
+                # blow up the context window. 100K chars ≈ 25K tokens — generous
+                # enough for any reasonable tool output but prevents catastrophic
+                # context explosions (e.g. accidental base64 image dumps).
+                MAX_TOOL_RESULT_CHARS = 100_000
+                if len(function_result) > MAX_TOOL_RESULT_CHARS:
+                    original_len = len(function_result)
+                    function_result = (
+                        function_result[:MAX_TOOL_RESULT_CHARS]
+                        + f"\n\n[Truncated: tool response was {original_len:,} chars, "
+                        f"exceeding the {MAX_TOOL_RESULT_CHARS:,} char limit]"
+                    )
+
+                tool_msg = {
+                    "role": "tool",
+                    "content": function_result,
+                    "tool_call_id": tool_call.id,
+                }
+
             if _is_error_result:
                 logger.warning("Tool %s returned error (%.2fs): %s", function_name, tool_duration, result_preview)
             else:
