@@ -29,8 +29,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +115,9 @@ def scale_coordinates_to_screen(
 # ---------------------------------------------------------------------------
 
 def _take_screenshot() -> Tuple[str, int, int, str]:
-    """Capture screenshot, downscale, return (base64_data, image_w, image_h).
+    """Capture screenshot, resize, convert to JPEG, return (base64_data, image_w, image_h, media_type).
 
-    Uses macOS native `screencapture` for capture and `sips` for resizing.
+    Uses macOS native `screencapture` for capture and `sips` for resizing/conversion.
     No Python imaging dependencies required.
     """
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
