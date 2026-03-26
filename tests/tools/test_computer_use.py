@@ -149,7 +149,7 @@ class TestHandleComputerUse:
         parsed = json.loads(result)
         assert "error" in parsed
 
-    @patch("tools.computer_use_tool._take_screenshot", return_value=("base64data", 1024, 768))
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("base64data", 1024, 768, "image/jpeg"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     def test_screenshot_returns_multimodal(self, _size, _screenshot):
         from tools.computer_use_tool import handle_computer_use
@@ -158,6 +158,7 @@ class TestHandleComputerUse:
         assert result["_multimodal"] is True
         assert result["content_blocks"][0]["type"] == "image"
         assert result["content_blocks"][0]["source"]["data"] == "base64data"
+        assert result["content_blocks"][0]["source"]["media_type"] == "image/jpeg"
 
 
 class TestRequirementsCheck:
