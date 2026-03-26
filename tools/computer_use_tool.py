@@ -247,7 +247,14 @@ def _execute_action(action: str, args: Dict[str, Any]) -> str:
     if action == "type":
         if not text:
             return "error: text required for type action"
-        pyautogui.write(text, interval=0.02)
+        # pyautogui.write() only handles ASCII. For Unicode text,
+        # copy to clipboard and paste via Cmd+V.
+        if all(ord(c) < 128 for c in text):
+            pyautogui.write(text, interval=0.02)
+        else:
+            import subprocess as _sp
+            _sp.run(["pbcopy"], input=text.encode("utf-8"), check=True)
+            pyautogui.hotkey("command", "v")
         return f"typed {len(text)} characters"
 
     if action == "key":
