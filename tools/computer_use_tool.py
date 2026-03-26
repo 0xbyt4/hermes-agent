@@ -389,7 +389,9 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     for coord_key in ("coordinate", "start_coordinate", "end_coordinate"):
         coord = args.get(coord_key)
         if coord and len(coord) == 2:
-            args[coord_key] = list(_scale_coord(coord[0], coord[1]))
+            # Claude may send coordinates as strings — cast to int.
+            # pyautogui interprets string args as image filenames to search.
+            args[coord_key] = list(_scale_coord(int(coord[0]), int(coord[1])))
 
     # Execute the action
     if action == "screenshot":
