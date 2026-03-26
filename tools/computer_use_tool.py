@@ -323,23 +323,25 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     if action not in ALL_ACTIONS:
         return json.dumps({"error": f"Unknown action: {action}. Valid: {ALL_ACTIONS}"})
 
-    # Gate destructive actions behind user approval (same system as terminal tool)
+    # Gate destructive actions behind user approval
     if action in _DESTRUCTIVE_ACTIONS:
-        try:
-            from tools.approval import check_all_command_guards
-            coord = args.get("coordinate", [])
-            coord_str = f" at ({coord[0]}, {coord[1]})" if len(coord) == 2 else ""
-            if action == "type":
-                cmd_str = f"computer: type '{args.get('text', '')[:50]}'"
-            elif action == "key":
-                cmd_str = f"computer: key {args.get('key', args.get('text', ''))}"
-            else:
-                cmd_str = f"computer: {action}{coord_str}"
-            result = check_all_command_guards(cmd_str, "computer_use")
-            if result.get("action") == "deny":
-                return json.dumps({"error": f"Action '{action}' denied by user"})
-        except (ImportError, Exception):
-            pass  # approval module unavailable or error — allow
+        approval_mode = os.environ.get("HERMES_YOLO_MODE") or ""
+        if not approval_mode:
+            try:
+                from tools.approval import prompt_dangerous_approval
+                coord = args.get("coordinate", [])
+                coord_str = f" at ({coord[0]}, {coord[1]})" if len(coord) == 2 else ""
+                if action == "type":
+                    cmd_display = f"type '{args.get('text', '')[:50]}'"
+                elif action == "key":
+                    cmd_display = f"key {args.get('key', args.get('text', ''))}"
+                else:
+                    cmd_display = f"{action}{coord_str}"
+                choice = prompt_dangerous_approval(cmd_display, "computer_use action")
+                if choice == "deny":
+                    return json.dumps({"error": f"Action '{action}' denied by user"})
+            except (ImportError, Exception):
+                pass  # approval module unavailable — allow
 
     # Scale coordinates from Claude's image space to actual screen.
     # Use cached screenshot dimensions (what Claude actually sees) for accuracy.
