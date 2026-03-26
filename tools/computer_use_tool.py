@@ -104,7 +104,7 @@ def scale_coordinates_to_screen(
 # Screenshot capture
 # ---------------------------------------------------------------------------
 
-def _take_screenshot() -> Tuple[str, int, int]:
+def _take_screenshot() -> Tuple[str, int, int, str]:
     """Capture screenshot, downscale, return (base64_data, image_w, image_h).
 
     Uses macOS native `screencapture` for capture and `sips` for resizing.
@@ -147,21 +147,34 @@ def _take_screenshot() -> Tuple[str, int, int]:
             )
             img_w, img_h = new_w, new_h
 
+        # Convert to JPEG for smaller size (5-10x smaller than PNG).
+        # Token cost is the same (based on pixels, not bytes) but
+        # transfer size and context estimation are much better.
+        jpg_path = tmp_path.replace(".png", ".jpg")
+        subprocess.run(
+            ["sips", "-s", "format", "jpeg", "-s", "formatOptions", "70",
+             tmp_path, "--out", jpg_path],
+            capture_output=True, timeout=10,
+        )
+        read_path = jpg_path if os.path.exists(jpg_path) else tmp_path
+
         # Read and base64 encode
-        with open(tmp_path, "rb") as f:
+        with open(read_path, "rb") as f:
             data = base64.b64encode(f.read()).decode("ascii")
+        media_type = "image/jpeg" if read_path.endswith(".jpg") else "image/png"
 
         # Cache actual screenshot dimensions for native tool definition
         global _cached_screenshot_size
         _cached_screenshot_size = (img_w, img_h)
 
-        return data, img_w, img_h
+        return data, img_w, img_h, media_type
 
     finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        for _p in (tmp_path, tmp_path.replace(".png", ".jpg")):
+            try:
+                os.unlink(_p)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +360,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     # Execute the action
     if action == "screenshot":
         try:
-            b64_data, img_w, img_h = _take_screenshot()
+            b64_data, img_w, img_h, img_media = _take_screenshot()
             return {
                 "_multimodal": True,
                 "content_blocks": [
@@ -355,7 +368,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "image/png",
+                            "media_type": img_media,
                             "data": b64_data,
                         },
                     },
@@ -386,7 +399,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
                     "type": "image",
                     "source": {
                         "type": "base64",
-                        "media_type": "image/png",
+                        "media_type": img_media,
                         "data": b64_data,
                     },
                 },
