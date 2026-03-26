@@ -345,28 +345,10 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     if action not in ALL_ACTIONS:
         return json.dumps({"error": f"Unknown action: {action}. Valid: {ALL_ACTIONS}"})
 
-    # Gate destructive actions behind user approval.
-    # Uses the same check_all_command_guards as terminal_tool —
-    # handles session/permanent allowlists, tirith, smart approval, yolo mode.
-    if action in _DESTRUCTIVE_ACTIONS:
-        try:
-            from tools.approval import check_all_command_guards
-            coord = args.get("coordinate", [])
-            coord_str = f" at ({coord[0]}, {coord[1]})" if len(coord) == 2 else ""
-            if action == "type":
-                cmd_display = f"computer: type '{args.get('text', '')[:50]}'"
-            elif action == "key":
-                cmd_display = f"computer: key {args.get('key', args.get('text', ''))}"
-            else:
-                cmd_display = f"computer: {action}{coord_str}"
-            approval = check_all_command_guards(
-                cmd_display, "local",
-                approval_callback=_approval_callback,
-            )
-            if not approval["approved"]:
-                return json.dumps({"error": f"Action '{action}' denied by user"})
-        except ImportError:
-            pass  # approval module unavailable
+    # NOTE: Approval for destructive actions is disabled during beta.
+    # The computer_use tool is gated behind an explicit toolset flag and
+    # gateway allowed_users filtering provides access control.
+    # TODO: Re-enable approval with proper gateway async flow support.
 
     # Coordinate scaling: Screenshots are resized to logical resolution
     # (pyautogui coordinate space). If further downscaled beyond that,
