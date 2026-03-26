@@ -6090,7 +6090,11 @@ class AIAgent:
                     logger.error("handle_function_call raised for %s: %s", function_name, tool_error, exc_info=True)
                 finally:
                     tool_duration = time.time() - tool_start_time
-                    cute_msg = _get_cute_tool_message_impl(function_name, function_args, tool_duration, result=_spinner_result)
+                    # Multimodal results (computer_use) are dicts — pass text summary for display
+                    _display_result = _spinner_result
+                    if isinstance(_display_result, dict) and _display_result.get("_multimodal"):
+                        _display_result = _display_result.get("text_summary", "")
+                    cute_msg = _get_cute_tool_message_impl(function_name, function_args, tool_duration, result=_display_result)
                     if spinner:
                         spinner.stop(cute_msg)
                     else:
@@ -6943,6 +6947,12 @@ class AIAgent:
                         from unittest.mock import Mock
                         if isinstance(getattr(self, "client", None), Mock):
                             _use_streaming = False
+
+                    # Disable streaming when computer_use is active — the
+                    # chat_completions streaming path cannot serialize native
+                    # Anthropic tool types (computer_20251124).
+                    if _use_streaming and "computer" in (self.valid_tool_names or set()):
+                        _use_streaming = False
 
                     if _use_streaming:
                         response = self._interruptible_streaming_api_call(
