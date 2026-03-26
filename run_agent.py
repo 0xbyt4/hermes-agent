@@ -4057,6 +4057,15 @@ class AIAgent:
     def _anthropic_messages_create(self, api_kwargs: dict):
         if self.api_mode == "anthropic_messages":
             self._try_refresh_anthropic_client_credentials()
+        # Use beta API when native tools (computer_use) are present —
+        # the standard messages.create() rejects non-function tool types.
+        tools = api_kwargs.get("tools", [])
+        has_native = any(
+            isinstance(t, dict) and t.get("type", "").startswith("computer_")
+            for t in tools
+        )
+        if has_native:
+            return self._anthropic_client.beta.messages.create(**api_kwargs)
         return self._anthropic_client.messages.create(**api_kwargs)
 
     def _interruptible_api_call(self, api_kwargs: dict):
@@ -4935,16 +4944,24 @@ class AIAgent:
             # user configured a smaller context window than the model's output limit.
             ctx_len = getattr(self, "context_compressor", None)
             ctx_len = ctx_len.context_length if ctx_len else None
+            native_tools = self._get_native_anthropic_tools()
+            # Filter out stub schemas for tools that have native definitions
+            # (e.g. "computer" has a native computer_20251124 type)
+            native_names = {t["name"] for t in (native_tools or [])}
+            filtered_tools = [
+                t for t in (self.tools or [])
+                if t.get("function", {}).get("name") not in native_names
+            ] if native_names else self.tools
             return build_anthropic_kwargs(
                 model=self.model,
                 messages=anthropic_messages,
-                tools=self.tools,
+                tools=filtered_tools,
                 max_tokens=self.max_tokens,
                 reasoning_config=self.reasoning_config,
                 is_oauth=self._is_anthropic_oauth,
                 preserve_dots=self._anthropic_preserve_dots(),
                 context_length=ctx_len,
-                native_tools=self._get_native_anthropic_tools(),
+                native_tools=native_tools,
             )
 
         if self.api_mode == "codex_responses":
