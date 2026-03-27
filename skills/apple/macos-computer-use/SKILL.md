@@ -22,7 +22,7 @@ Control a macOS desktop via the `computer` tool — screenshots, mouse, keyboard
 2. **Screenshot after** — verify every action worked
 3. **Never assume focus** — verify which app is active before typing
 4. **Keyboard shortcuts over clicks** — shortcuts are 100% reliable, clicks can miss by a few pixels
-5. **MEDIA tag for gateway** — include `MEDIA:/tmp/hermes_screenshot.jpg` in your response to send screenshots to the user
+5. **MEDIA tag for gateway** — extract the `MEDIA:/tmp/hermes_screenshot_<id>.jpg` path from the screenshot result's `text_summary` and include it in your response
 6. **Terminal as fallback** — `osascript`, `open`, `pbcopy`/`pbpaste` are always available when GUI fails
 
 ## DO NOT (Safety)
@@ -39,7 +39,7 @@ Control a macOS desktop via the `computer` tool — screenshots, mouse, keyboard
 
 **CLI mode**: Terminal running Hermes has focus. After using terminal tool (osascript, open), Terminal takes focus back. If you then `type`, text goes to Terminal, not target app. **Workaround**: after every terminal command, re-activate the target app with osascript and verify with screenshot.
 
-**Gateway mode** (Telegram/Discord): Agent runs in background, no terminal window steals focus. This is the reliable mode for multi-step GUI workflows. Always include `MEDIA:/tmp/hermes_screenshot.jpg` in your response so the user sees screenshots.
+**Gateway mode** (Telegram/Discord): Agent runs in background, no terminal window steals focus. This is the reliable mode for multi-step GUI workflows. Always extract the `MEDIA:` path from the screenshot result's `text_summary` and include it in your response so the user sees screenshots.
 
 ## App Switching & Focus
 
@@ -220,13 +220,13 @@ If Chrome is not running, `open location` launches it first (add extra wait time
 
 When the user requests a screenshot via gateway (Telegram/Discord):
 
-1. `computer action=screenshot` returns text_summary containing `MEDIA:/tmp/hermes_screenshot.jpg`
-2. You MUST include the exact `MEDIA:/tmp/hermes_screenshot.jpg` string in your response text
+1. `computer action=screenshot` returns `text_summary` containing a `MEDIA:/tmp/hermes_screenshot_<id>.jpg` path (unique per capture)
+2. Extract the exact `MEDIA:` path from `text_summary` and include it in your response text
 3. The gateway extracts this path and sends the image file to the chat
 4. If you omit the MEDIA tag, the user sees no image
-5. The file is overwritten on each new screenshot
+5. Each screenshot creates a new file with a unique ID — old files are cleaned up automatically
 
-Example response: "Here's your screenshot MEDIA:/tmp/hermes_screenshot.jpg — I can see Chrome open with X/Twitter."
+Example response: "Here's your screenshot MEDIA:/tmp/hermes_screenshot_a1b2c3d4.jpg — I can see Chrome open with X/Twitter."
 
 ## Notification and Dialog Handling
 

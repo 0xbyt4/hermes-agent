@@ -113,7 +113,7 @@ The terminal running Hermes has focus. After using `osascript` or `open` via the
 
 When running via Telegram/Discord gateway, the agent runs in the background with no terminal window. Focus issues don't occur, making this the most reliable mode for desktop automation.
 
-Screenshots are sent as images to the chat. The agent includes `MEDIA:/tmp/hermes_screenshot.jpg` in its response, and the gateway delivers it as a native image.
+Screenshots are sent as images to the chat. Each screenshot generates a unique file path (e.g., `MEDIA:/tmp/hermes_screenshot_a1b2c3d4.jpg`). The agent extracts this path from the tool result's `text_summary` and includes it in the response, and the gateway delivers it as a native image.
 
 ## Skills
 

@@ -63,6 +63,35 @@ _SAFE_ACTIONS = frozenset({"screenshot", "mouse_move", "wait", "zoom"})
 
 ALL_ACTIONS = sorted(_DESTRUCTIVE_ACTIONS | _SAFE_ACTIONS)
 
+# Maximum number of screenshot/zoom temp files to keep in /tmp
+_MAX_TEMP_FILES = 5
+
+
+def _cleanup_temp_files() -> None:
+    """Remove old hermes screenshot/zoom temp files, keeping the latest ones."""
+    import glob
+    patterns = ["/tmp/hermes_screenshot_*.jpg", "/tmp/hermes_screenshot_*.png",
+                "/tmp/hermes_zoom_*.jpg", "/tmp/hermes_zoom_full_*.jpg"]
+    all_files = []
+    for pat in patterns:
+        all_files.extend(glob.glob(pat))
+    if len(all_files) <= _MAX_TEMP_FILES:
+        return
+    # Sort by modification time, oldest first. Use 0 for files deleted between
+    # glob and getmtime (race with concurrent sessions).
+    def _safe_mtime(f: str) -> float:
+        try:
+            return os.path.getmtime(f)
+        except OSError:
+            return 0
+    all_files.sort(key=_safe_mtime)
+    for f in all_files[:-_MAX_TEMP_FILES]:
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Screen resolution helpers
 # ---------------------------------------------------------------------------
@@ -384,6 +413,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     # Execute the action
     if action == "screenshot":
         try:
+            _cleanup_temp_files()
             b64_data, img_w, img_h, img_media = _take_screenshot()
             # Save to file for gateway MEDIA: tag (sends image to Telegram/Discord)
             # Use session-unique path to avoid race between concurrent gateway sessions
@@ -417,18 +447,19 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
         if not region or len(region) != 4:
             return json.dumps({"error": "zoom requires region: [x1, y1, x2, y2]"})
         try:
+            _cleanup_temp_files()
             b64_data, img_w, img_h, img_media = _take_screenshot()
             # Crop the region using sips (save full screenshot, crop, re-encode)
             import uuid as _uuid
-            tmp_full = f"/tmp/hermes_zoom_full_{_uuid.uuid4().hex[:8]}.png"
+            tmp_full = f"/tmp/hermes_zoom_full_{_uuid.uuid4().hex[:8]}.jpg"
             tmp_crop = f"/tmp/hermes_zoom_crop_{_uuid.uuid4().hex[:8]}.jpg"
             with open(tmp_full, "wb") as f:
                 f.write(base64.b64decode(b64_data))
             x1, y1, x2, y2 = int(region[0]), int(region[1]), int(region[2]), int(region[3])
             crop_w, crop_h = x2 - x1, y2 - y1
             subprocess.run(
-                ["sips", "--cropToHeightWidth", str(crop_h), str(crop_w),
-                 "--cropOffset", str(y1), str(x1),
+                ["sips", "--cropOffset", str(y1), str(x1),
+                 "--cropToHeightWidth", str(crop_h), str(crop_w),
                  "-s", "format", "jpeg", "-s", "formatOptions", "90",
                  tmp_full, "--out", tmp_crop],
                 capture_output=True, timeout=10,
@@ -569,6 +600,16 @@ _COMPUTER_USE_SCHEMA = {
             "duration": {
                 "type": "number",
                 "description": "Duration in seconds for wait/hold_key",
+            },
+            "start_coordinate": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "[x, y] start coordinate for left_click_drag",
+            },
+            "end_coordinate": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "[x, y] end coordinate for left_click_drag",
             },
             "region": {
                 "type": "array",
