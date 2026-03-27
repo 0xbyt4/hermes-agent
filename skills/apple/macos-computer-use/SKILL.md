@@ -146,18 +146,55 @@ The `scroll` action may fail in some apps. Reliable alternatives:
 
 **Note**: Each key press must be a separate `computer action=key` call. Do not combine like `Down Down Down`.
 
-## Clicking
+## Clicking — Hover-Verify-Click Pattern
 
-Coordinates are in logical screen resolution (e.g., 1470x956). The tool auto-scales from screenshot space.
+**CRITICAL**: Never blind-click. Always verify cursor position first.
 
-### Tips:
-- **Aim for center** of buttons/icons — edge clicks may miss
-- **Dock**: icons are at y > 930 (on 956px screen height)
+The screenshot includes the mouse cursor and reports `Cursor at (x, y)` in the result. Use this to navigate precisely.
+
+### Reliable click pattern (ALWAYS use this):
+```
+1. screenshot — see the screen, note where cursor is
+2. mouse_move to target — move cursor to the element you want to click
+3. screenshot — VERIFY cursor is on the correct element
+4. left_click (no coordinate) — click at current cursor position
+5. screenshot — verify the click had the expected effect
+```
+
+### Why this works:
+- `mouse_move` is 100% accurate — cursor goes exactly where you say
+- Screenshot shows cursor visually — you can SEE if it's on the right element
+- `left_click` without coordinates clicks at current position — no guessing
+- If cursor is wrong, adjust with another `mouse_move` before clicking
+
+### DO NOT:
+- Do NOT guess coordinates and click directly — you will miss small targets
+- Do NOT retry the same coordinate after a miss — take screenshot and adjust
+- Do NOT combine mouse_move + click in one step — always verify between them
+
+### Coordinate reference:
+- **Dock icons**: y > 930 (on 956px screen)
 - **Menu bar**: y = 0 to 25
-- **After a miss**: take screenshot, identify correct position, then click updated coordinate. Do NOT retry same coordinate.
-- **`mouse_move` first** to verify position visually, then `left_click`
+- **Aim for center** of buttons/icons — never edges
 - **`double_click`** for opening files in Finder
-- **`triple_click`** to select entire line/paragraph in text editors
+- **`triple_click`** to select entire line/paragraph
+
+### Context menus (right-click):
+```
+1. mouse_move to target element
+2. screenshot — verify position
+3. right_click — opens context menu
+4. screenshot — see menu options
+5. mouse_move to menu item
+6. screenshot — verify on correct item
+7. left_click — select menu item
+```
+
+### Focus management before clicking:
+- Before clicking in an app window, make sure that app is FRONTMOST
+- Use `osascript -e 'tell application "AppName" to activate'` first
+- Or click on an empty area of the target window first to bring it to front
+- Then use hover-verify-click on the specific element
 
 ## Drag and Drop
 
@@ -268,39 +305,84 @@ The computer tool requires macOS permissions:
 
 ## Workflow Examples
 
-### Open a website and search:
+### Click a specific UI element (hover-verify-click):
 ```
-1. Terminal: osascript -e 'tell application "Google Chrome" to activate'
-2. computer action=wait, duration=0.5
-3. computer action=screenshot — verify Chrome active
-4. computer action=key, key=command+l — focus address bar
-5. computer action=type, text=https://x.com
-6. computer action=key, key=Return
-7. computer action=wait, duration=2
-8. computer action=screenshot — verify page loaded
+1. screenshot — see screen, note cursor position
+2. mouse_move to [x, y] — move cursor to target button/icon
+3. screenshot — VERIFY cursor is on the correct element
+4. left_click — click at current position (no coordinates!)
+5. screenshot — verify click had expected effect
+```
+
+### Create a new folder in Finder (GUI):
+```
+1. osascript -e 'tell application "Finder" to activate'
+2. wait 0.5s
+3. screenshot — verify Finder is frontmost
+4. mouse_move to empty area in Finder window
+5. screenshot — verify cursor in window
+6. right_click — open context menu
+7. screenshot — see menu
+8. mouse_move to "New Folder" menu item
+9. screenshot — verify on correct item
+10. left_click — creates folder with editable name
+11. type: MyNewFolder
+12. key: Return — confirm name
+13. screenshot — verify folder created
+```
+
+### Open a website:
+```
+1. osascript -e 'tell application "Google Chrome" to activate'
+2. wait 0.5s
+3. screenshot — verify Chrome active
+4. key: command+l — focus address bar
+5. type: https://x.com
+6. key: Return
+7. wait 2s
+8. screenshot — verify page loaded
+```
+
+### Click a link on a webpage:
+```
+1. screenshot — see the page
+2. mouse_move to the link text/button
+3. screenshot — verify cursor is on the link
+4. left_click — click the link
+5. wait 1s
+6. screenshot — verify navigation
+```
+
+### Fill a form field:
+```
+1. screenshot — see the form
+2. mouse_move to the input field
+3. screenshot — verify cursor on field
+4. left_click — focus the field
+5. screenshot — verify cursor blinking in field
+6. type: field value
+7. key: Tab — move to next field
+8. screenshot — verify text entered
 ```
 
 ### Create and save a text file:
 ```
 1. Terminal: open -a TextEdit
-2. computer action=wait, duration=1
-3. computer action=screenshot — verify TextEdit open
-4. computer action=type, text=Hello World
-5. computer action=key, key=command+s — save dialog
-6. computer action=wait, duration=0.5
-7. computer action=screenshot — verify dialog
-8. computer action=type, text=myfile.txt
-9. computer action=key, key=Return
+2. wait 1s
+3. screenshot — verify TextEdit open
+4. type: Hello World
+5. key: command+s — save dialog
+6. wait 0.5s
+7. screenshot — verify dialog
+8. type: myfile.txt
+9. key: Return
 ```
 
-### Find and open a file:
+### Drag a file:
 ```
-1. Terminal: osascript -e 'tell application "Finder" to activate'
-2. computer action=wait, duration=0.5
-3. computer action=key, key=command+shift+g — Go to Folder
-4. computer action=type, text=/Users/username/Documents
-5. computer action=key, key=Return
-6. computer action=wait, duration=0.5
-7. computer action=screenshot — see folder contents
-8. computer action=double_click on target file
+1. screenshot — see files
+2. mouse_move to source file icon
+3. screenshot — verify on file
+4. left_click_drag with start_coordinate and end_coordinate to target folder
+5. screenshot — verify file moved
 ```
