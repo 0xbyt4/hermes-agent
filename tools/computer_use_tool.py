@@ -317,7 +317,11 @@ def _execute_action(action: str, args: Dict[str, Any]) -> str:
         # supports ASCII. Clipboard paste works with any layout and any charset.
         import subprocess as _sp
         _sp.run(["pbcopy"], input=text.encode("utf-8"), check=True)
-        pyautogui.hotkey("command", "v")
+        # interval=0.04 gives macOS time to register modifier before letter key.
+        # Without this, hotkey() sends all keys with 0ms between them (it calls
+        # platformModule._keyDown directly, bypassing pyautogui.PAUSE), and macOS
+        # may not register cmd as held before 'v' arrives.
+        pyautogui.hotkey("command", "v", interval=0.04)
         return f"typed {len(text)} characters"
 
     if action == "key":
@@ -328,7 +332,14 @@ def _execute_action(action: str, args: Dict[str, Any]) -> str:
         if len(keys) == 1:
             pyautogui.press(keys[0])
         else:
-            pyautogui.hotkey(*keys)
+            # interval=0.04 (40ms) between key downs/ups. pyautogui.hotkey()
+            # calls platformModule._keyDown() directly (bypassing the per-call
+            # PAUSE decorator), so without an explicit interval all keys fire
+            # with 0ms gap. macOS needs ~20-50ms to register a modifier as
+            # "held" before the letter key arrives; 0ms means cmd+shift+n can
+            # arrive as three simultaneous keypresses and the OS may not treat
+            # cmd/shift as modifiers. 40ms is safe and imperceptible to users.
+            pyautogui.hotkey(*keys, interval=0.04)
         return f"pressed {key_combo}"
 
     if action == "scroll":
