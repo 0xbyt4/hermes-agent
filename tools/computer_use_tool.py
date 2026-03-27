@@ -74,12 +74,21 @@ ALL_ACTIONS = sorted(_DESTRUCTIVE_ACTIONS | _SAFE_ACTIONS)
 # the "cmd" key (no keycode found) and only presses "n".
 # Same for "super" — not a valid pyautogui key on macOS.
 _KEY_NAME_MAP = {
+    # Modifier aliases
     "cmd": "command",
     "super": "command",
     "meta": "command",
     "win": "command",
     "opt": "option",
     "control": "ctrl",
+    # Keys Claude sends with underscores/different names
+    "page_down": "pagedown",
+    "page_up": "pageup",
+    "arrow_up": "up",
+    "arrow_down": "down",
+    "arrow_left": "left",
+    "arrow_right": "right",
+    "delete": "backspace",  # macOS Delete key = backspace
 }
 
 # Maximum number of screenshot/zoom temp files to keep in /tmp
@@ -254,11 +263,23 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
 # Action execution
 # ---------------------------------------------------------------------------
 
-def _execute_action(action: str, args: Dict[str, Any]) -> str:
-    """Execute a computer use action. Returns status message."""
+def _execute_action(action: str, args: Dict[str, Any],
+                     image_w: int = 0, image_h: int = 0,
+                     actual_w: int = 0, actual_h: int = 0) -> str:
+    """Execute a computer use action. Returns status message.
+
+    Positions in return messages are reported in screenshot/image coordinate
+    space (image_w x image_h) so Claude can correlate them with what it sees.
+    """
     import pyautogui
     pyautogui.FAILSAFE = True  # Move mouse to corner to abort
 
+    def _pos_in_image_space() -> Tuple[int, int]:
+        """Get current cursor position converted to screenshot coordinate space."""
+        pos = pyautogui.position()
+        if image_w and actual_w and image_w != actual_w:
+            return int(pos.x * image_w / actual_w), int(pos.y * image_h / actual_h)
+        return pos.x, pos.y
 
     coordinate = args.get("coordinate")
     text = args.get("text", "")
@@ -270,45 +291,48 @@ def _execute_action(action: str, args: Dict[str, Any]) -> str:
         if not coordinate:
             return "error: coordinate required for mouse_move"
         pyautogui.moveTo(coordinate[0], coordinate[1], duration=0.3)
-        actual = pyautogui.position()
-        return f"moved to ({actual.x}, {actual.y}). Take a screenshot to verify cursor is on the correct element before clicking."
+        ix, iy = _pos_in_image_space()
+        return f"moved to ({ix}, {iy}). Take a screenshot to verify cursor is on the correct element before clicking."
 
     if action == "left_click":
         if coordinate:
             pyautogui.click(coordinate[0], coordinate[1])
-            pos = pyautogui.position()
-            return f"clicked at ({pos.x}, {pos.y}). Take screenshot to verify the click result."
+            ix, iy = _pos_in_image_space()
+            return f"clicked at ({ix}, {iy}). Take screenshot to verify the click result."
         pyautogui.click()
-        pos = pyautogui.position()
-        return f"clicked at current position ({pos.x}, {pos.y}). Take screenshot to verify."
+        ix, iy = _pos_in_image_space()
+        return f"clicked at current position ({ix}, {iy}). Take screenshot to verify."
 
     if action == "right_click":
         if coordinate:
             pyautogui.rightClick(coordinate[0], coordinate[1])
-            pos = pyautogui.position()
-            return f"right-clicked at ({pos.x}, {pos.y}). Take screenshot to see the context menu."
+            ix, iy = _pos_in_image_space()
+            return f"right-clicked at ({ix}, {iy}). Take screenshot to see the context menu."
         pyautogui.rightClick()
-        pos = pyautogui.position()
-        return f"right-clicked at current position ({pos.x}, {pos.y}). Take screenshot to see the menu."
+        ix, iy = _pos_in_image_space()
+        return f"right-clicked at current position ({ix}, {iy}). Take screenshot to see the menu."
 
     if action == "double_click":
         if coordinate:
             pyautogui.doubleClick(coordinate[0], coordinate[1])
-            return f"double-clicked at ({coordinate[0]}, {coordinate[1]})"
+            ix, iy = _pos_in_image_space()
+            return f"double-clicked at ({ix}, {iy})"
         pyautogui.doubleClick()
         return "double-clicked at current position"
 
     if action == "triple_click":
         if coordinate:
             pyautogui.tripleClick(coordinate[0], coordinate[1])
-            return f"triple-clicked at ({coordinate[0]}, {coordinate[1]})"
+            ix, iy = _pos_in_image_space()
+            return f"triple-clicked at ({ix}, {iy})"
         pyautogui.tripleClick()
         return "triple-clicked at current position"
 
     if action == "middle_click":
         if coordinate:
             pyautogui.middleClick(coordinate[0], coordinate[1])
-            return f"middle-clicked at ({coordinate[0]}, {coordinate[1]})"
+            ix, iy = _pos_in_image_space()
+            return f"middle-clicked at ({ix}, {iy})"
         pyautogui.middleClick()
         return "middle-clicked at current position"
 
@@ -321,7 +345,8 @@ def _execute_action(action: str, args: Dict[str, Any]) -> str:
         pyautogui.mouseDown()
         pyautogui.moveTo(end[0], end[1], duration=0.5)
         pyautogui.mouseUp()
-        return f"dragged from ({start[0]}, {start[1]}) to ({end[0]}, {end[1]})"
+        ix, iy = _pos_in_image_space()
+        return f"dragged from start to ({ix}, {iy})"
 
     if action == "type":
         if not text:
@@ -344,9 +369,11 @@ def _execute_action(action: str, args: Dict[str, Any]) -> str:
             return "error: key required for key action"
         raw_keys = [k.strip() for k in key_combo.replace("+", " ").split()]
         # Normalize key names: "cmd" -> "command", "super" -> "command", etc.
-        # pyautogui silently drops unknown key names (no keycode found),
-        # so "cmd+n" would only press "n" without this mapping.
-        keys = [_KEY_NAME_MAP.get(k.lower(), k) for k in raw_keys]
+        # pyautogui is case-sensitive and only accepts lowercase key names
+        # (e.g. "f3" not "F3", "return" not "Return", "escape" not "Escape").
+        # Claude often sends PascalCase or uppercase keys which pyautogui
+        # silently drops (no keycode found), so we lowercase everything.
+        keys = [_KEY_NAME_MAP.get(k.lower(), k.lower()) for k in raw_keys]
         if len(keys) == 1:
             pyautogui.press(keys[0])
         else:
@@ -466,11 +493,18 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
         try:
             _cleanup_temp_files()
             b64_data, img_w, img_h, img_media = _take_screenshot()
-            # Get current mouse position for Claude's awareness
+            # Get current mouse position for Claude's awareness.
+            # CRITICAL: Report position in screenshot coordinate space (img_w x img_h),
+            # NOT pyautogui's logical screen space (actual_w x actual_h).
+            # Claude sees the image at img_w x img_h and uses these coordinates
+            # to understand where the cursor is visually on screen.
             try:
                 import pyautogui as _pag
                 _mx, _my = _pag.position()
-                _cursor_info = f" Cursor at ({_mx}, {_my})."
+                # Convert from screen space to screenshot/image space
+                _img_mx = int(_mx * img_w / actual_w) if actual_w else _mx
+                _img_my = int(_my * img_h / actual_h) if actual_h else _my
+                _cursor_info = f" Cursor at ({_img_mx}, {_img_my})."
             except Exception:
                 _cursor_info = ""
             # Save to file for gateway MEDIA: tag (sends image to Telegram/Discord)
@@ -592,7 +626,9 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     try:
         if _modifier:
             _pag.keyDown(_modifier)
-        status = _execute_action(action, args)
+        status = _execute_action(action, args,
+                                  image_w=image_w, image_h=image_h,
+                                  actual_w=actual_w, actual_h=actual_h)
     except Exception as e:
         logger.error("Action %s failed: %s", action, e)
         return json.dumps({"error": f"Action '{action}' failed: {e}"})
