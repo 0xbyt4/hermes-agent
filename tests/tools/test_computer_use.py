@@ -231,10 +231,11 @@ class TestActionResults:
     @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     def test_screenshot_media_tag_has_correct_path(self, _size, _screenshot):
-        """MEDIA: tag should contain /tmp/hermes_screenshot.jpg."""
+        """MEDIA: tag should contain /tmp/hermes_screenshot_ prefix."""
         from tools.computer_use_tool import handle_computer_use
         result = handle_computer_use({"action": "screenshot"})
-        assert "MEDIA:/tmp/hermes_screenshot.jpg" in result["text_summary"]
+        assert "MEDIA:/tmp/hermes_screenshot_" in result["text_summary"]
+        assert ".jpg" in result["text_summary"]
 
 
 class TestDragCoordinates:

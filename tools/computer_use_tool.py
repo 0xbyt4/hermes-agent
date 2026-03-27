@@ -59,7 +59,7 @@ _DESTRUCTIVE_ACTIONS = frozenset({
 })
 
 # Actions that are read-only
-_SAFE_ACTIONS = frozenset({"screenshot", "mouse_move", "wait"})
+_SAFE_ACTIONS = frozenset({"screenshot", "mouse_move", "wait", "zoom"})
 
 ALL_ACTIONS = sorted(_DESTRUCTIVE_ACTIONS | _SAFE_ACTIONS)
 
@@ -409,6 +409,58 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             logger.error("Screenshot failed: %s", e)
             return json.dumps({"error": f"Screenshot failed: {e}"})
 
+    if action == "zoom":
+        # Zoom captures a specific region at full resolution for detailed inspection.
+        # Takes a region [x1, y1, x2, y2] and returns a cropped, full-res screenshot.
+        region = args.get("region")
+        if not region or len(region) != 4:
+            return json.dumps({"error": "zoom requires region: [x1, y1, x2, y2]"})
+        try:
+            b64_data, img_w, img_h, img_media = _take_screenshot()
+            # Crop the region using sips (save full screenshot, crop, re-encode)
+            import uuid as _uuid
+            tmp_full = f"/tmp/hermes_zoom_full_{_uuid.uuid4().hex[:8]}.png"
+            tmp_crop = f"/tmp/hermes_zoom_crop_{_uuid.uuid4().hex[:8]}.jpg"
+            with open(tmp_full, "wb") as f:
+                f.write(base64.b64decode(b64_data))
+            x1, y1, x2, y2 = int(region[0]), int(region[1]), int(region[2]), int(region[3])
+            crop_w, crop_h = x2 - x1, y2 - y1
+            subprocess.run(
+                ["sips", "--cropToHeightWidth", str(crop_h), str(crop_w),
+                 "--cropOffset", str(y1), str(x1),
+                 "-s", "format", "jpeg", "-s", "formatOptions", "90",
+                 tmp_full, "--out", tmp_crop],
+                capture_output=True, timeout=10,
+            )
+            with open(tmp_crop, "rb") as f:
+                crop_b64 = base64.b64encode(f.read()).decode("ascii")
+            # Cleanup
+            for p in (tmp_full, tmp_crop):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+            screenshot_path = f"/tmp/hermes_zoom_{_uuid.uuid4().hex[:8]}.jpg"
+            with open(screenshot_path, "wb") as f:
+                f.write(base64.b64decode(crop_b64))
+            return {
+                "_multimodal": True,
+                "content_blocks": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": crop_b64,
+                        },
+                    },
+                ],
+                "text_summary": f"Zoomed region ({x1},{y1})-({x2},{y2}) = {crop_w}x{crop_h}px MEDIA:{screenshot_path}",
+            }
+        except Exception as e:
+            logger.error("Zoom failed: %s", e)
+            return json.dumps({"error": f"Zoom failed: {e}"})
+
     # Execute the action — no auto-screenshot. Claude will send a
     # separate 'screenshot' action when it wants to see the result.
     # This avoids doubling token/transfer cost on every interaction.
@@ -442,6 +494,7 @@ def get_native_tool_definition() -> Dict[str, Any]:
         "name": "computer",
         "display_width_px": image_w,
         "display_height_px": image_h,
+        "enable_zoom": True,
     }
 
 
@@ -502,6 +555,11 @@ _COMPUTER_USE_SCHEMA = {
             "duration": {
                 "type": "number",
                 "description": "Duration in seconds for wait/hold_key",
+            },
+            "region": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "[x1, y1, x2, y2] region to zoom into for detailed view",
             },
         },
         "required": ["action"],
