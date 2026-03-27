@@ -50,6 +50,11 @@ def set_approval_callback(cb):
 
 # Anthropic recommends max 1568px on longest edge for screenshots
 _MAX_SCREENSHOT_EDGE = 1568
+# Anthropic auto-downscales images over ~1,150,000 pixels (~1533 tokens).
+# If we exceed this, Claude sees a smaller image than we declare in
+# display_width_px/display_height_px, causing coordinate mismatch.
+# Use 1,100,000 as safe limit (leaves headroom).
+_MAX_SCREENSHOT_PIXELS = 1_100_000
 
 # Actions that modify system state — require user approval
 _DESTRUCTIVE_ACTIONS = frozenset({
@@ -187,10 +192,20 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
             )
             img_w, img_h = logical_w, logical_h
 
-        # Further downscale if logical resolution exceeds Anthropic's max
+        # Further downscale if logical resolution exceeds Anthropic's limits.
+        # Two constraints: max edge (1568px) and max total pixels (~1.15MP).
+        # Exceeding either causes Anthropic to auto-downscale the image,
+        # making Claude see different dimensions than display_width_px/display_height_px,
+        # which causes coordinate mismatch (Claude targets wrong pixels).
+        import math as _math
+        total_pixels = img_w * img_h
         long_edge = max(img_w, img_h)
-        if long_edge > _MAX_SCREENSHOT_EDGE:
-            scale = _MAX_SCREENSHOT_EDGE / long_edge
+
+        edge_scale = min(1.0, _MAX_SCREENSHOT_EDGE / long_edge)
+        pixel_scale = min(1.0, _math.sqrt(_MAX_SCREENSHOT_PIXELS / total_pixels))
+        scale = min(edge_scale, pixel_scale)
+
+        if scale < 1.0:
             new_w = int(img_w * scale)
             new_h = int(img_h * scale)
             subprocess.run(
