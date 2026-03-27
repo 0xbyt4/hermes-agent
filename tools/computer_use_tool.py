@@ -155,7 +155,7 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
     try:
         # Capture screenshot silently (-x = no sound)
         subprocess.run(
-            ["screencapture", "-x", "-t", "png", tmp_path],
+            ["screencapture", "-x", "-C", "-t", "png", tmp_path],
             capture_output=True, timeout=10,
         )
         if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
@@ -415,6 +415,13 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
         try:
             _cleanup_temp_files()
             b64_data, img_w, img_h, img_media = _take_screenshot()
+            # Get current mouse position for Claude's awareness
+            try:
+                import pyautogui as _pag
+                _mx, _my = _pag.position()
+                _cursor_info = f" Cursor at ({_mx}, {_my})."
+            except Exception:
+                _cursor_info = ""
             # Save to file for gateway MEDIA: tag (sends image to Telegram/Discord)
             # Use session-unique path to avoid race between concurrent gateway sessions
             import uuid as _uuid
@@ -434,7 +441,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
                         },
                     },
                 ],
-                "text_summary": f"Screenshot taken ({img_w}x{img_h}) MEDIA:{screenshot_path}",
+                "text_summary": f"Screenshot taken ({img_w}x{img_h}).{_cursor_info} MEDIA:{screenshot_path}",
             }
         except Exception as e:
             logger.error("Screenshot failed: %s", e)
