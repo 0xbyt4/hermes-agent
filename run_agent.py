@@ -2592,6 +2592,14 @@ class AIAgent:
             tool_guidance.append(SESSION_SEARCH_GUIDANCE)
         if "skill_manage" in self.valid_tool_names:
             tool_guidance.append(SKILLS_GUIDANCE)
+        if "computer" in self.valid_tool_names:
+            tool_guidance.append(
+                "COMPUTER USE: Never blind-click. Always use hover-verify-click pattern: "
+                "1) mouse_move to target, 2) screenshot to verify cursor is on element, "
+                "3) left_click without coordinates. The screenshot shows the cursor and reports "
+                "'Cursor at (x, y)' in the result. For gateway users, include the MEDIA: path "
+                "from the screenshot result in your response to send images."
+            )
         if tool_guidance:
             prompt_parts.append(" ".join(tool_guidance))
 
