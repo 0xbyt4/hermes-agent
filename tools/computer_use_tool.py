@@ -209,6 +209,7 @@ def _execute_action(action: str, args: Dict[str, Any]) -> str:
     import pyautogui
     pyautogui.FAILSAFE = True  # Move mouse to corner to abort
 
+
     coordinate = args.get("coordinate")
     text = args.get("text", "")
 
@@ -464,11 +465,24 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     # Execute the action — no auto-screenshot. Claude will send a
     # separate 'screenshot' action when it wants to see the result.
     # This avoids doubling token/transfer cost on every interaction.
+    #
+    # Modifier keys (shift, ctrl, alt, super) are held during click/scroll
+    # actions per Anthropic spec — the "text" param on these actions holds
+    # the modifier name, not text to type.
+    import pyautogui as _pag
+    _MODIFIER_MAP = {"shift": "shift", "ctrl": "ctrl", "alt": "alt", "super": "command"}
+    _mod_text = args.get("text", "").strip().lower() if action not in ("type", "key") else ""
+    _modifier = _MODIFIER_MAP.get(_mod_text)
     try:
+        if _modifier:
+            _pag.keyDown(_modifier)
         status = _execute_action(action, args)
     except Exception as e:
         logger.error("Action %s failed: %s", action, e)
         return json.dumps({"error": f"Action '{action}' failed: {e}"})
+    finally:
+        if _modifier:
+            _pag.keyUp(_modifier)
 
     return json.dumps({"success": True, "status": status})
 
