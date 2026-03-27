@@ -221,7 +221,41 @@ The screenshot includes the mouse cursor and reports `Cursor at (x, y)` in the r
 5. mouse_move to menu item
 6. screenshot — verify on correct item
 7. left_click — select menu item
+8. screenshot — verify action result (see Text Input State below)
 ```
+
+### Text Input State (CRITICAL — read this carefully)
+
+Some actions activate a **text input field** where the next step is typing, NOT clicking. Clicking on an active text field will **dismiss it** and you lose the state.
+
+**Actions that activate text input:**
+- Clicking "Rename" in a context menu → filename becomes an editable text field
+- Pressing `Return` on a selected file in Finder → rename mode activates
+- `command+l` in browser → address bar is focused
+- Clicking a search box or form field → text cursor appears
+- `command+f` → find bar opens with cursor ready
+- Double-clicking text in a document → text becomes editable
+
+**After activating text input, follow this pattern:**
+```
+1. screenshot — verify the text field is active (look for: blue border around text,
+   blinking cursor, highlighted/selected text, or editable text area)
+2. DO NOT click on the text field — this will DEACTIVATE it
+3. cmd+a — select all existing text (optional, if you need to replace)
+4. type: your new text
+5. Return — confirm the input
+6. screenshot — verify the change was applied
+```
+
+**How to recognize an active text field in a screenshot:**
+- Text is highlighted/selected (blue background over text)
+- A thin blue or white border appears around the filename or field
+- The cursor (blinking line) is visible inside the field
+- The text area looks slightly different from its normal state
+
+**If you accidentally click and dismiss the text field:**
+- Do NOT repeat the same sequence — you'll loop forever
+- Instead: re-select the item, then use keyboard (Return for Finder rename) or re-open context menu
 
 ### Focus management before clicking:
 - Before clicking in an app window, make sure that app is FRONTMOST
@@ -394,10 +428,37 @@ computer action=zoom, region=[x1, y1, x2, y2]
 7. screenshot — see menu
 8. mouse_move to "New Folder" menu item
 9. screenshot — verify on correct item
-10. left_click — creates folder with editable name
-11. type: MyNewFolder
-12. key: Return — confirm name
-13. screenshot — verify folder created
+10. left_click — creates folder with editable name field active
+    *** TEXT INPUT STATE — do NOT click again ***
+11. screenshot — verify name field is editable (text highlighted)
+12. type: MyNewFolder — (do NOT click the name field first!)
+13. key: Return — confirm name
+14. screenshot — verify folder created with correct name
+```
+
+### Rename a file or folder in Finder:
+```
+METHOD 1 — Keyboard (preferred):
+1. Click file to select it
+2. screenshot — verify file is selected (highlighted)
+3. key: Return — activates rename mode
+    *** TEXT INPUT STATE — do NOT click the filename ***
+4. screenshot — verify name is editable (text highlighted in blue)
+5. cmd+a — select all existing text
+6. type: NewFileName
+7. key: Return — confirm rename
+8. screenshot — verify renamed
+
+METHOD 2 — Context menu:
+1. mouse_move to file, verify, right_click — context menu appears
+2. screenshot — find "Rename" in menu
+3. mouse_move to "Rename", verify, left_click
+    *** TEXT INPUT STATE — do NOT click the filename ***
+4. screenshot — verify name field is editable
+5. cmd+a — select all existing text
+6. type: NewFileName
+7. key: Return — confirm rename
+8. screenshot — verify renamed
 ```
 
 ### Open a website:
