@@ -63,7 +63,29 @@ Control a macOS desktop via the `computer` tool — screenshots, mouse, keyboard
 
 ## Keyboard Shortcuts
 
-100% reliable — always prefer over clicking.
+100% reliable — always prefer over clicking. But shortcuts only work when the correct app is focused and no overlay (dialog, menu, Spotlight) is blocking input.
+
+### Pre-shortcut Checklist (MUST follow)
+
+**Before ANY keyboard shortcut:**
+1. `key: Escape` — dismiss any open menu, dialog, Spotlight, or overlay
+2. `screenshot` — verify the correct app is frontmost and no overlay is blocking
+3. Only THEN press the shortcut
+4. `screenshot` — verify the shortcut worked
+
+**If a shortcut does nothing:**
+1. `key: Escape` — normalize state
+2. `screenshot` — check what's on screen
+3. Verify the correct app is in focus (check title bar, menu bar app name)
+4. If wrong app: `osascript -e 'tell application "AppName" to activate'` + `wait 0.5`
+5. Retry the shortcut
+6. If still fails after 2 attempts: use terminal/osascript fallback, do NOT keep retrying the same shortcut
+
+**DO NOT:**
+- Press shortcuts without verifying focus first
+- Retry the same shortcut more than 2 times — switch to terminal fallback
+- Use non-standard shortcuts (e.g. `super`, `cmd+F3`) — stick to the list below
+- Press `cmd+space` and then click elsewhere — use `Escape` to dismiss Spotlight first
 
 ### System
 | Action | Shortcut |
@@ -90,6 +112,17 @@ Control a macOS desktop via the `computer` tool — screenshots, mouse, keyboard
 | Find | `command+f` |
 | Top of page | `command+Up` |
 | Bottom of page | `command+Down` |
+
+### Finder
+| Action | Shortcut |
+|--------|----------|
+| New Finder window | `command+n` |
+| New folder | `command+shift+n` |
+| Get info | `command+i` |
+| Duplicate | `command+d` |
+| Move to trash | `command+Delete` |
+| Go to folder | `command+shift+g` |
+| Show hidden files | `command+shift+.` |
 
 ### Text editing
 | Action | Shortcut |
@@ -272,15 +305,36 @@ Example response: "Here's your screenshot MEDIA:/tmp/hermes_screenshot_a1b2c3d4.
 - "Save changes?" dialogs: `Return` to save, `command+d` for don't save, `Escape` to cancel
 - Spotlight sometimes activates unexpectedly — press `Escape` to dismiss
 
+## Escape Normalization (CRITICAL)
+
+`Escape` is your reset button. Use it aggressively to clear unknown state.
+
+**When to press Escape:**
+- Before ANY keyboard shortcut (clears menus, dialogs, Spotlight)
+- After a failed action (resets state before retry)
+- When you don't know what's on screen (normalize first, then screenshot)
+- After closing Spotlight (`cmd+space`) — ALWAYS press Escape, never click away
+- Before switching apps (clears any open overlay in current app)
+
+**Escape sequence for stuck states:**
+```
+1. key: Escape          — dismiss overlay/menu/dialog
+2. key: Escape          — press again (some dialogs need 2 presses)
+3. screenshot           — see what state we're in now
+4. Decide next action based on clean state
+```
+
+**Multiple Escape is safe** — pressing Escape when nothing is open does nothing. It never causes harm.
+
 ## Error Recovery
 
-1. `key: Escape` — close dialogs, cancel operations
-2. `command+z` — undo last action
-3. `command+w` — close current window/tab
-4. `computer action=screenshot` — always check what happened
-5. Terminal fallback: `osascript`, `open`, `pbcopy`/`pbpaste`
+1. `key: Escape` (2x) — close dialogs, menus, cancel operations
+2. `screenshot` — always check what happened
+3. `command+z` — undo last action
+4. `command+w` — close current window/tab
+5. Terminal fallback: `osascript`, `open`, `pbcopy`/`pbpaste` — always available when GUI fails
 6. App not responding: `command+option+Escape` opens Force Quit, or `osascript -e 'tell application "AppName" to quit'`
-7. For stuck states: take screenshot to diagnose, then decide next action
+7. **Retry limit**: if an action fails 2 times, switch to a different approach (terminal, osascript, different shortcut). Do NOT keep retrying the same thing.
 
 ## Accessibility Permissions
 
@@ -290,6 +344,21 @@ The computer tool requires macOS permissions:
 - Symptom of missing permission: screenshot returns empty or click/type fails silently
 - After granting permission, Terminal must be **fully restarted** (not just new tab)
 - For gateway: the Python process itself needs these permissions
+
+## Zoom Action
+
+Use `zoom` to inspect a small area at full resolution. Useful for reading small text, verifying icons, or checking UI details.
+
+```
+computer action=zoom, region=[x1, y1, x2, y2]
+```
+
+**Rules:**
+- Region coordinates are in screenshot space (not screen space)
+- Minimum region size: 30x30 pixels (smaller regions are rejected)
+- Aim for regions of 100x100 to 400x300 for best results
+- Do NOT use tiny strips (e.g. 1300x25) — they produce unusable images
+- If you need to read text, capture a region that includes full line height plus padding
 
 ## Limitations
 

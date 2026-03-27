@@ -383,6 +383,16 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     """
     action = args.get("action", "")
 
+    # Debug log every tool call to /tmp/hermes_computer_debug.log
+    try:
+        import pyautogui as _dbg_pag
+        _dbg_pos = _dbg_pag.position()
+        _dbg_line = f"{time.strftime('%H:%M:%S')} action={action} args={json.dumps({k:v for k,v in args.items() if k != 'action'}, default=str)[:200]} cursor_before=({_dbg_pos.x},{_dbg_pos.y})\n"
+        with open("/tmp/hermes_computer_debug.log", "a") as _dbg_f:
+            _dbg_f.write(_dbg_line)
+    except Exception:
+        pass
+
     if action not in ALL_ACTIONS:
         return json.dumps({"error": f"Unknown action: {action}. Valid: {ALL_ACTIONS}"})
 
@@ -441,6 +451,13 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             screenshot_path = f"/tmp/hermes_screenshot_{_uuid.uuid4().hex[:8]}.{ext}"
             with open(screenshot_path, "wb") as f:
                 f.write(base64.b64decode(b64_data))
+            _text_summary = f"Screenshot taken ({img_w}x{img_h}).{_cursor_info} MEDIA:{screenshot_path}"
+            # Debug: log screenshot result
+            try:
+                with open("/tmp/hermes_computer_debug.log", "a") as _dbg_f:
+                    _dbg_f.write(f"  -> result: {_text_summary[:150]}\n")
+            except Exception:
+                pass
             return {
                 "_multimodal": True,
                 "content_blocks": [
@@ -453,7 +470,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
                         },
                     },
                 ],
-                "text_summary": f"Screenshot taken ({img_w}x{img_h}).{_cursor_info} MEDIA:{screenshot_path}",
+                "text_summary": _text_summary,
             }
         except Exception as e:
             logger.error("Screenshot failed: %s", e)
@@ -463,8 +480,21 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
         # Zoom captures a specific region at full resolution for detailed inspection.
         # Takes a region [x1, y1, x2, y2] and returns a cropped, full-res screenshot.
         region = args.get("region")
+        # Claude may send region as JSON string "[380, 430, 530, 490]"
+        if isinstance(region, str):
+            try:
+                region = json.loads(region)
+            except (json.JSONDecodeError, ValueError):
+                return json.dumps({"error": f"zoom: invalid region format: {region}"})
         if not region or len(region) != 4:
             return json.dumps({"error": "zoom requires region: [x1, y1, x2, y2]"})
+        # Validate minimum region size — tiny regions produce unusable crops
+        _zw, _zh = abs(int(region[2]) - int(region[0])), abs(int(region[3]) - int(region[1]))
+        if _zw < 30 or _zh < 30:
+            return json.dumps({
+                "error": f"zoom region too small: {_zw}x{_zh}px. Minimum 30x30px. "
+                "Use a larger region for useful results."
+            })
         try:
             _cleanup_temp_files()
             b64_data, img_w, img_h, img_media = _take_screenshot()
@@ -494,6 +524,13 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             screenshot_path = f"/tmp/hermes_zoom_{_uuid.uuid4().hex[:8]}.jpg"
             with open(screenshot_path, "wb") as f:
                 f.write(base64.b64decode(crop_b64))
+            _zoom_summary = f"Zoomed region ({x1},{y1})-({x2},{y2}) = {crop_w}x{crop_h}px MEDIA:{screenshot_path}"
+            # Debug: log zoom result
+            try:
+                with open("/tmp/hermes_computer_debug.log", "a") as _dbg_f:
+                    _dbg_f.write(f"  -> result: {_zoom_summary[:150]}\n")
+            except Exception:
+                pass
             return {
                 "_multimodal": True,
                 "content_blocks": [
@@ -506,7 +543,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
                         },
                     },
                 ],
-                "text_summary": f"Zoomed region ({x1},{y1})-({x2},{y2}) = {crop_w}x{crop_h}px MEDIA:{screenshot_path}",
+                "text_summary": _zoom_summary,
             }
         except Exception as e:
             logger.error("Zoom failed: %s", e)
@@ -533,6 +570,14 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     finally:
         if _modifier:
             _pag.keyUp(_modifier)
+
+    # Debug: log cursor position after action
+    try:
+        _dbg_pos_after = _pag.position()
+        with open("/tmp/hermes_computer_debug.log", "a") as _dbg_f:
+            _dbg_f.write(f"  -> result: {status[:100]} cursor_after=({_dbg_pos_after.x},{_dbg_pos_after.y})\n")
+    except Exception:
+        pass
 
     return json.dumps({"success": True, "status": status})
 
