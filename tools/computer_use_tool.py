@@ -199,21 +199,14 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
             )
             img_w, img_h = new_w, new_h
 
-        # Convert to JPEG for smaller size (5-10x smaller than PNG).
-        # Token cost is the same (based on pixels, not bytes) but
-        # transfer size and context estimation are much better.
-        jpg_path = tmp_path.replace(".png", ".jpg")
-        subprocess.run(
-            ["sips", "-s", "format", "jpeg", "-s", "formatOptions", "70",
-             tmp_path, "--out", jpg_path],
-            capture_output=True, timeout=10,
-        )
-        read_path = jpg_path if os.path.exists(jpg_path) else tmp_path
-
+        # Keep PNG format — token cost is pixel-based (width*height/750),
+        # not byte-based, so PNG vs JPEG costs the same tokens. But PNG
+        # preserves text sharpness in menus, buttons, and small UI elements
+        # that Claude needs to read for accurate coordinate targeting.
         # Read and base64 encode
-        with open(read_path, "rb") as f:
+        with open(tmp_path, "rb") as f:
             data = base64.b64encode(f.read()).decode("ascii")
-        media_type = "image/jpeg" if read_path.endswith(".jpg") else "image/png"
+        media_type = "image/png"
 
         # Cache actual screenshot dimensions for native tool definition
         global _cached_screenshot_size
@@ -222,11 +215,10 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
         return data, img_w, img_h, media_type
 
     finally:
-        for _p in (tmp_path, tmp_path.replace(".png", ".jpg")):
-            try:
-                os.unlink(_p)
-            except OSError:
-                pass
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
