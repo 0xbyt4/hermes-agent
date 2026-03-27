@@ -196,6 +196,20 @@ TOOL_USE_ENFORCEMENT_MODELS = ("gpt", "codex")
 # message representation stays consistent ("system" everywhere).
 DEVELOPER_ROLE_MODELS = ("gpt-5", "codex")
 
+COMPUTER_USE_GUIDANCE = (
+    "COMPUTER USE: Never blind-click. Always use the hover-verify-click pattern:\n"
+    "1) mouse_move to target coordinate\n"
+    "2) screenshot to VERIFY cursor is visually on the correct element\n"
+    "3) left_click WITHOUT coordinates (clicks at current cursor position)\n"
+    "The screenshot includes the mouse cursor and reports 'Cursor at (x, y)' in the result. "
+    "Use this to confirm position before clicking. If the cursor is not on the right element, "
+    "adjust with another mouse_move.\n"
+    "For right-click menus: mouse_move to element, verify, right_click, screenshot to see menu, "
+    "then mouse_move to menu item, verify, left_click.\n"
+    "For gateway users: include the MEDIA: path from the screenshot result in your response "
+    "to deliver screenshots as images to the user."
+)
+
 PLATFORM_HINTS = {
     "whatsapp": (
         "You are on a text messaging communication platform, WhatsApp. "
