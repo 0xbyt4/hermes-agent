@@ -260,6 +260,65 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
 
 
 # ---------------------------------------------------------------------------
+# Quartz-level drag  (pyautogui can't do this correctly)
+# ---------------------------------------------------------------------------
+
+def _quartz_drag(sx: int, sy: int, ex: int, ey: int,
+                 duration: float = 0.8, steps: int = 40) -> None:
+    """Drag from (sx,sy) to (ex,ey) using native Quartz CGEvents.
+
+    pyautogui.moveTo() always sends kCGEventMouseMoved, even when the mouse
+    button is held down. macOS expects kCGEventLeftMouseDragged while a button
+    is pressed — without the correct event type the OS never initiates a drag
+    operation. This helper sends the correct event sequence directly via Quartz.
+    """
+    import Quartz
+    btn = Quartz.kCGMouseButtonLeft
+
+    # 1. Move cursor to start (no button pressed)
+    move_ev = Quartz.CGEventCreateMouseEvent(
+        None, Quartz.kCGEventMouseMoved, (sx, sy), btn)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, move_ev)
+    time.sleep(0.15)
+
+    # 2. Mouse-down at start
+    down_ev = Quartz.CGEventCreateMouseEvent(
+        None, Quartz.kCGEventLeftMouseDown, (sx, sy), btn)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, down_ev)
+    # Brief pause — just enough for macOS to register the press but short
+    # enough to beat Finder's inline-rename timer (~0.5s). Moving quickly
+    # after mouseDown tells the OS "this is a drag, not a click-to-rename".
+    time.sleep(0.15)
+
+    # 3. Small initial drag to cross macOS drag-initiation threshold (~3px).
+    #    This nudge makes macOS commit to a drag operation before any rename
+    #    or selection-rect logic can activate.
+    nudge_x = sx + (4 if ex >= sx else -4)
+    nudge_y = sy + (4 if ey >= sy else -4)
+    nudge_ev = Quartz.CGEventCreateMouseEvent(
+        None, Quartz.kCGEventLeftMouseDragged, (nudge_x, nudge_y), btn)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, nudge_ev)
+    time.sleep(0.1)
+
+    # 4. Drag to destination in small steps using kCGEventLeftMouseDragged
+    step_delay = duration / steps
+    for i in range(1, steps + 1):
+        t = i / steps
+        cx = int(nudge_x + (ex - nudge_x) * t)
+        cy = int(nudge_y + (ey - nudge_y) * t)
+        drag_ev = Quartz.CGEventCreateMouseEvent(
+            None, Quartz.kCGEventLeftMouseDragged, (cx, cy), btn)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, drag_ev)
+        time.sleep(step_delay)
+
+    # 4. Small settle pause, then release
+    time.sleep(0.2)
+    up_ev = Quartz.CGEventCreateMouseEvent(
+        None, Quartz.kCGEventLeftMouseUp, (ex, ey), btn)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, up_ev)
+
+
+# ---------------------------------------------------------------------------
 # Action execution
 # ---------------------------------------------------------------------------
 
@@ -290,7 +349,29 @@ def _execute_action(action: str, args: Dict[str, Any],
     if action == "mouse_move":
         if not coordinate:
             return "error: coordinate required for mouse_move"
-        pyautogui.moveTo(coordinate[0], coordinate[1], duration=0.3)
+        # Check if mouse button is currently held (e.g. during decomposed drag).
+        # If held, we must send kCGEventLeftMouseDragged instead of MouseMoved.
+        import Quartz
+        btn_state = Quartz.CGEventSourceButtonState(
+            Quartz.kCGEventSourceStateCombinedSessionState,
+            Quartz.kCGMouseButtonLeft,
+        )
+        if btn_state:
+            # Button is held — send drag events so macOS registers the drag
+            cx, cy = pyautogui.position()
+            tx, ty = int(coordinate[0]), int(coordinate[1])
+            steps = 20
+            for i in range(1, steps + 1):
+                t = i / steps
+                mx = int(cx + (tx - cx) * t)
+                my = int(cy + (ty - cy) * t)
+                drag_ev = Quartz.CGEventCreateMouseEvent(
+                    None, Quartz.kCGEventLeftMouseDragged, (mx, my),
+                    Quartz.kCGMouseButtonLeft)
+                Quartz.CGEventPost(Quartz.kCGHIDEventTap, drag_ev)
+                time.sleep(0.015)
+        else:
+            pyautogui.moveTo(coordinate[0], coordinate[1], duration=0.3)
         ix, iy = _pos_in_image_space()
         return f"moved to ({ix}, {iy}). Take a screenshot to verify cursor is on the correct element before clicking."
 
@@ -345,21 +426,7 @@ def _execute_action(action: str, args: Dict[str, Any],
             return "error: start_coordinate and end_coordinate are identical — nothing to drag"
         sx, sy = int(start[0]), int(start[1])
         ex, ey = int(end[0]), int(end[1])
-        # Move to start position first (no click yet)
-        pyautogui.moveTo(sx, sy, duration=0.3)
-        time.sleep(0.15)
-        # Press and hold
-        pyautogui.mouseDown(button="left")
-        time.sleep(0.5)  # macOS needs dwell time to distinguish drag from click
-        # Small initial movement to cross macOS drag threshold (~3px)
-        dx = 4 if ex >= sx else -4
-        dy = 4 if ey >= sy else -4
-        pyautogui.moveTo(sx + dx, sy + dy, duration=0.05)
-        time.sleep(0.1)
-        # Drag to destination
-        pyautogui.moveTo(ex, ey, duration=0.8)
-        time.sleep(0.2)  # Settle before releasing
-        pyautogui.mouseUp(button="left")
+        _quartz_drag(sx, sy, ex, ey)
         ix, iy = _pos_in_image_space()
         return f"dragged from ({sx}, {sy}) to ({ix}, {iy})"
 
@@ -420,13 +487,30 @@ def _execute_action(action: str, args: Dict[str, Any],
         return f"waited {duration}s"
 
     if action == "left_mouse_down":
+        import Quartz
         if coordinate:
-            pyautogui.moveTo(coordinate[0], coordinate[1])
-        pyautogui.mouseDown()
+            x, y = int(coordinate[0]), int(coordinate[1])
+        else:
+            pos = pyautogui.position()
+            x, y = pos.x, pos.y
+        # Use Quartz directly so the mouseDown event carries the correct
+        # position — pyautogui.moveTo + mouseDown can desync on macOS.
+        move_ev = Quartz.CGEventCreateMouseEvent(
+            None, Quartz.kCGEventMouseMoved, (x, y), Quartz.kCGMouseButtonLeft)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, move_ev)
+        time.sleep(0.1)
+        down_ev = Quartz.CGEventCreateMouseEvent(
+            None, Quartz.kCGEventLeftMouseDown, (x, y), Quartz.kCGMouseButtonLeft)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, down_ev)
         return "mouse button pressed down"
 
     if action == "left_mouse_up":
-        pyautogui.mouseUp()
+        import Quartz
+        pos = pyautogui.position()
+        x, y = pos.x, pos.y
+        up_ev = Quartz.CGEventCreateMouseEvent(
+            None, Quartz.kCGEventLeftMouseUp, (x, y), Quartz.kCGMouseButtonLeft)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, up_ev)
         return "mouse button released"
 
     if action == "hold_key":
