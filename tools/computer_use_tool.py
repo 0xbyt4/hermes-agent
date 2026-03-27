@@ -338,15 +338,30 @@ def _execute_action(action: str, args: Dict[str, Any],
 
     if action == "left_click_drag":
         start = args.get("start_coordinate", coordinate)
-        end = args.get("end_coordinate")
+        end = args.get("end_coordinate") or args.get("coordinate") or coordinate
         if not start or not end:
             return "error: start_coordinate and end_coordinate required for drag"
-        pyautogui.moveTo(start[0], start[1], duration=0.2)
-        pyautogui.mouseDown()
-        pyautogui.moveTo(end[0], end[1], duration=0.5)
-        pyautogui.mouseUp()
+        if start == end:
+            return "error: start_coordinate and end_coordinate are identical — nothing to drag"
+        sx, sy = int(start[0]), int(start[1])
+        ex, ey = int(end[0]), int(end[1])
+        # Move to start position first (no click yet)
+        pyautogui.moveTo(sx, sy, duration=0.3)
+        time.sleep(0.15)
+        # Press and hold
+        pyautogui.mouseDown(button="left")
+        time.sleep(0.5)  # macOS needs dwell time to distinguish drag from click
+        # Small initial movement to cross macOS drag threshold (~3px)
+        dx = 4 if ex >= sx else -4
+        dy = 4 if ey >= sy else -4
+        pyautogui.moveTo(sx + dx, sy + dy, duration=0.05)
+        time.sleep(0.1)
+        # Drag to destination
+        pyautogui.moveTo(ex, ey, duration=0.8)
+        time.sleep(0.2)  # Settle before releasing
+        pyautogui.mouseUp(button="left")
         ix, iy = _pos_in_image_space()
-        return f"dragged from start to ({ix}, {iy})"
+        return f"dragged from ({sx}, {sy}) to ({ix}, {iy})"
 
     if action == "type":
         if not text:
