@@ -305,18 +305,30 @@ The `scroll` action may fail in some apps. Reliable alternatives:
 
 ## Drag and Drop
 
-The tool supports `left_click_drag` with `start_coordinate` and `end_coordinate`.
+**ALWAYS use `left_click_drag`** — it is a single atomic operation. Do NOT decompose drag into separate `left_mouse_down` + `mouse_move` + `left_mouse_up` steps — macOS will not recognize decomposed events as a drag gesture and will show a selection rectangle instead.
 
 ```
 computer action=left_click_drag, start_coordinate=[100, 200], end_coordinate=[400, 300]
 ```
 
-Use cases:
-- Move files in Finder: drag from file icon to target folder
-- Move windows: drag from title bar
-- Resize windows: drag from window edges (prefer keyboard/osascript alternatives)
+### Targeting (CRITICAL):
+- **Aim for the exact center of the file icon** — a few pixels off lands on empty space and starts a selection rectangle instead of drag
+- Before drag: use `zoom` on the icon area to confirm the exact center coordinates
+- If drag fails (selection rectangle appears), adjust coordinates and retry — you are missing the icon
 
-**Alternative for file operations**: `mv`, `cp` via terminal is more reliable than drag.
+### Drag pattern:
+```
+1. screenshot — see the screen
+2. zoom on source icon area — find exact center coordinates
+3. zoom on destination area — find exact drop target coordinates
+4. left_click_drag with start_coordinate=[icon_center] end_coordinate=[target]
+5. screenshot — verify file moved
+```
+
+Use cases:
+- Move files in Finder: drag from file icon center to target folder
+- Move windows: drag from title bar
+- Resize windows: drag from window edges
 
 ## Reading Screen Content
 
@@ -551,8 +563,9 @@ METHOD 2 — Context menu:
 ### Drag a file:
 ```
 1. screenshot — see files
-2. mouse_move to source file icon
-3. screenshot — verify on file
-4. left_click_drag with start_coordinate and end_coordinate to target folder
+2. zoom on source file icon — find exact center coordinates
+3. zoom on target folder — find exact drop coordinates
+4. left_click_drag start_coordinate=[icon_center] end_coordinate=[target_center]
+   (MUST use left_click_drag — never decompose into mouse_down + move + mouse_up)
 5. screenshot — verify file moved
 ```
