@@ -2594,6 +2594,24 @@ class AIAgent:
             tool_guidance.append(SKILLS_GUIDANCE)
         if "computer" in self.valid_tool_names:
             tool_guidance.append(COMPUTER_USE_GUIDANCE)
+            # Auto-load the macos-computer-use skill when computer_use is active.
+            # The COMPUTER_USE_GUIDANCE above is a short behavioral summary;
+            # the full skill contains detailed workflows (hover-verify-click,
+            # text input state, Finder operations, shortcuts, etc.) that the
+            # model needs to use the computer tool effectively.
+            try:
+                from agent.skill_commands import _load_skill_payload, _build_skill_message
+                _cu_skill = _load_skill_payload("macos-computer-use")
+                if _cu_skill:
+                    _cu_loaded, _cu_dir, _cu_name = _cu_skill
+                    _cu_note = (
+                        "[SYSTEM: The macos-computer-use skill is auto-loaded because the "
+                        "computer_use toolset is active. Follow its instructions when using "
+                        "the computer tool.]"
+                    )
+                    tool_guidance.append(_build_skill_message(_cu_loaded, _cu_dir, _cu_note))
+            except Exception:
+                pass  # Skill not found or error — guidance alone is enough
         if tool_guidance:
             prompt_parts.append(" ".join(tool_guidance))
 

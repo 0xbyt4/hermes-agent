@@ -21,8 +21,8 @@ Control a macOS desktop via the `computer` tool — screenshots, mouse, keyboard
 1. **Screenshot first** — always see the screen before acting
 2. **Screenshot after** — verify every action worked
 3. **Never assume focus** — verify which app is active before typing
-4. **Keyboard shortcuts over clicks** — shortcuts are 100% reliable, clicks can miss by a few pixels
-5. **MEDIA tag for gateway** — extract the `MEDIA:/tmp/hermes_screenshot_<id>.jpg` path from the screenshot result's `text_summary` and include it in your response
+4. **Use cursor for GUI tasks** — hover-verify-click is reliable for buttons, menus, icons, and UI elements. Use keyboard shortcuts for text editing, app switching, and well-known commands
+5. **MEDIA tag for gateway** — extract the `MEDIA:/tmp/hermes_screenshot_<id>.png` path from the screenshot result's `text_summary` and include it in your response
 6. **Terminal as fallback** — `osascript`, `open`, `pbcopy`/`pbpaste` are always available when GUI fails
 
 ## DO NOT (Safety)
@@ -61,9 +61,95 @@ Control a macOS desktop via the `computer` tool — screenshots, mouse, keyboard
 3. `computer action=screenshot` — confirm correct app is focused
 4. Now safe to type/click in that app
 
+## Cursor Interaction (PRIMARY method for GUI)
+
+The cursor is your primary tool for interacting with any visible UI element — buttons, menus, dropdowns, sidebar items, dialog controls, icons, tabs, and links. If you can see it on screen, you can click it.
+
+### Hover-Verify-Click Pattern (ALWAYS use this):
+```
+1. screenshot — see the screen, note where cursor is
+2. mouse_move to target — move cursor to the element you want to click
+3. screenshot — VERIFY cursor is on the correct element
+4. left_click (no coordinate) — click at current cursor position
+5. screenshot — verify the click had the expected effect
+```
+
+### Why this works:
+- `mouse_move` is accurate — cursor goes exactly where you say
+- Screenshot shows cursor visually — you can SEE if it's on the right element
+- `left_click` without coordinates clicks at current position — no guessing
+- If cursor is wrong, adjust with another `mouse_move` before clicking
+
+### Click types:
+- **`left_click`** — standard click (buttons, menus, links)
+- **`double_click`** — open files/folders in Finder, select a word in text
+- **`right_click`** — open context menus
+- **`triple_click`** — select entire line/paragraph
+
+### Coordinate reference:
+- **Dock icons**: y > 820 (on 1300x845 screenshot)
+- **Menu bar**: y = 0 to 22
+- **Aim for center** of buttons/icons — never edges
+
+### DO NOT:
+- Do NOT guess coordinates and click directly — always hover-verify first
+- Do NOT retry the same coordinate after a miss — take screenshot and adjust
+- Do NOT combine mouse_move + click in one step — always verify between them
+
+### Context menus (right-click):
+```
+1. mouse_move to target element
+2. screenshot — verify position
+3. right_click — opens context menu
+4. screenshot — see menu options
+5. mouse_move to menu item
+6. screenshot — verify on correct item
+7. left_click — select menu item
+8. screenshot — verify action result (see Text Input State below)
+```
+
+### Navigating dialogs and UI with cursor:
+Save dialogs, settings windows, preference panels — use cursor to interact:
+- **Sidebar items**: mouse_move to item in sidebar, verify, click
+- **Dropdown menus**: mouse_move to dropdown, verify, click to open, then click option
+- **Buttons** (Save, Cancel, OK): mouse_move to button center, verify, click
+- **Tabs**: mouse_move to tab label, verify, click
+- **Disclosure triangles** (▼): small arrows that expand/collapse sections — click to toggle
+- **Checkboxes/radio buttons**: mouse_move to the control, verify, click
+
+### Text Input State (CRITICAL)
+
+Some actions activate a **text input field** where the next step is typing, NOT clicking. Clicking on an active text field will **dismiss it** and you lose the state.
+
+**Actions that activate text input:**
+- Clicking "Rename" in a context menu → filename becomes editable
+- Pressing `Return` on a selected file in Finder → rename mode
+- `command+l` in browser → address bar focused
+- Clicking a search box or form field → text cursor appears
+- `command+s` in an app → save dialog with name field active
+
+**After activating text input:**
+```
+1. screenshot — verify the text field is active (blue border, highlighted text, cursor visible)
+2. DO NOT click on the text field — this will DEACTIVATE it
+3. cmd+a — select all existing text (if replacing)
+4. type: your new text
+5. Return — confirm the input
+6. screenshot — verify the change was applied
+```
+
+**If you accidentally dismiss the text field:**
+- Do NOT repeat the same sequence — you'll loop forever
+- Re-select the item and try again, or use a different approach
+
+### Focus management before clicking:
+- Before clicking in an app window, make sure that app is FRONTMOST
+- Use `osascript -e 'tell application "AppName" to activate'` first
+- Or click on an empty area of the target window first to bring it to front
+
 ## Keyboard Shortcuts
 
-100% reliable — always prefer over clicking. But shortcuts only work when the correct app is focused and no overlay (dialog, menu, Spotlight) is blocking input.
+Useful for text editing and app switching. For GUI interactions (buttons, menus, dropdowns, sidebar items, dialogs), prefer using the cursor with hover-verify-click — it works on any UI element you can see.
 
 ### Pre-shortcut Checklist (MUST follow)
 
@@ -209,97 +295,13 @@ The `scroll` action may fail in some apps. Reliable alternatives:
 |--------|-------------|
 | `key: space` | Scroll down in browser |
 | `key: shift+space` | Scroll up in browser |
-| `key: Page_Down` | Scroll down (most apps) |
-| `key: Page_Up` | Scroll up (most apps) |
+| `key: pagedown` | Scroll down (most apps) |
+| `key: pageup` | Scroll up (most apps) |
 | `key: command+Up` | Top of page/document |
 | `key: command+Down` | Bottom of page/document |
 | `key: Down` | Small scroll (send multiple separate actions) |
 
 **Note**: Each key press must be a separate `computer action=key` call. Do not combine like `Down Down Down`.
-
-## Clicking — Hover-Verify-Click Pattern
-
-**CRITICAL**: Never blind-click. Always verify cursor position first.
-
-The screenshot includes the mouse cursor and reports `Cursor at (x, y)` in the result. Use this to navigate precisely.
-
-### Reliable click pattern (ALWAYS use this):
-```
-1. screenshot — see the screen, note where cursor is
-2. mouse_move to target — move cursor to the element you want to click
-3. screenshot — VERIFY cursor is on the correct element
-4. left_click (no coordinate) — click at current cursor position
-5. screenshot — verify the click had the expected effect
-```
-
-### Why this works:
-- `mouse_move` is 100% accurate — cursor goes exactly where you say
-- Screenshot shows cursor visually — you can SEE if it's on the right element
-- `left_click` without coordinates clicks at current position — no guessing
-- If cursor is wrong, adjust with another `mouse_move` before clicking
-
-### DO NOT:
-- Do NOT guess coordinates and click directly — you will miss small targets
-- Do NOT retry the same coordinate after a miss — take screenshot and adjust
-- Do NOT combine mouse_move + click in one step — always verify between them
-
-### Coordinate reference:
-- **Dock icons**: y > 930 (on 956px screen)
-- **Menu bar**: y = 0 to 25
-- **Aim for center** of buttons/icons — never edges
-- **`double_click`** for opening files in Finder
-- **`triple_click`** to select entire line/paragraph
-
-### Context menus (right-click):
-```
-1. mouse_move to target element
-2. screenshot — verify position
-3. right_click — opens context menu
-4. screenshot — see menu options
-5. mouse_move to menu item
-6. screenshot — verify on correct item
-7. left_click — select menu item
-8. screenshot — verify action result (see Text Input State below)
-```
-
-### Text Input State (CRITICAL — read this carefully)
-
-Some actions activate a **text input field** where the next step is typing, NOT clicking. Clicking on an active text field will **dismiss it** and you lose the state.
-
-**Actions that activate text input:**
-- Clicking "Rename" in a context menu → filename becomes an editable text field
-- Pressing `Return` on a selected file in Finder → rename mode activates
-- `command+l` in browser → address bar is focused
-- Clicking a search box or form field → text cursor appears
-- `command+f` → find bar opens with cursor ready
-- Double-clicking text in a document → text becomes editable
-
-**After activating text input, follow this pattern:**
-```
-1. screenshot — verify the text field is active (look for: blue border around text,
-   blinking cursor, highlighted/selected text, or editable text area)
-2. DO NOT click on the text field — this will DEACTIVATE it
-3. cmd+a — select all existing text (optional, if you need to replace)
-4. type: your new text
-5. Return — confirm the input
-6. screenshot — verify the change was applied
-```
-
-**How to recognize an active text field in a screenshot:**
-- Text is highlighted/selected (blue background over text)
-- A thin blue or white border appears around the filename or field
-- The cursor (blinking line) is visible inside the field
-- The text area looks slightly different from its normal state
-
-**If you accidentally click and dismiss the text field:**
-- Do NOT repeat the same sequence — you'll loop forever
-- Instead: re-select the item, then use keyboard (Return for Finder rename) or re-open context menu
-
-### Focus management before clicking:
-- Before clicking in an app window, make sure that app is FRONTMOST
-- Use `osascript -e 'tell application "AppName" to activate'` first
-- Or click on an empty area of the target window first to bring it to front
-- Then use hover-verify-click on the specific element
 
 ## Drag and Drop
 
@@ -441,7 +443,7 @@ computer action=zoom, region=[x1, y1, x2, y2]
 - Screenshots capture primary display only (multi-monitor: secondary displays invisible)
 - Type action overwrites clipboard
 - Cannot handle macOS full-screen Spaces/Mission Control
-- Coordinate accuracy ~5-10px — small UI targets may need retry
+- Coordinate accuracy ~1-2px after scaling — cursor placement is precise
 - Cannot detect Touch Bar interactions
 
 ## Workflow Examples
