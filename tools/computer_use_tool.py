@@ -68,6 +68,20 @@ _SAFE_ACTIONS = frozenset({"screenshot", "mouse_move", "wait", "zoom"})
 
 ALL_ACTIONS = sorted(_DESTRUCTIVE_ACTIONS | _SAFE_ACTIONS)
 
+# pyautogui key name normalization.
+# Claude sends "cmd" but pyautogui requires "command" (keycode 55).
+# Without this mapping, pyautogui.hotkey("cmd", "n") silently drops
+# the "cmd" key (no keycode found) and only presses "n".
+# Same for "super" — not a valid pyautogui key on macOS.
+_KEY_NAME_MAP = {
+    "cmd": "command",
+    "super": "command",
+    "meta": "command",
+    "win": "command",
+    "opt": "option",
+    "control": "ctrl",
+}
+
 # Maximum number of screenshot/zoom temp files to keep in /tmp
 _MAX_TEMP_FILES = 5
 
@@ -328,7 +342,11 @@ def _execute_action(action: str, args: Dict[str, Any]) -> str:
         key_combo = args.get("key", text)
         if not key_combo:
             return "error: key required for key action"
-        keys = [k.strip() for k in key_combo.replace("+", " ").split()]
+        raw_keys = [k.strip() for k in key_combo.replace("+", " ").split()]
+        # Normalize key names: "cmd" -> "command", "super" -> "command", etc.
+        # pyautogui silently drops unknown key names (no keycode found),
+        # so "cmd+n" would only press "n" without this mapping.
+        keys = [_KEY_NAME_MAP.get(k.lower(), k) for k in raw_keys]
         if len(keys) == 1:
             pyautogui.press(keys[0])
         else:
@@ -568,7 +586,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     # actions per Anthropic spec — the "text" param on these actions holds
     # the modifier name, not text to type.
     import pyautogui as _pag
-    _MODIFIER_MAP = {"shift": "shift", "ctrl": "ctrl", "alt": "alt", "super": "command"}
+    _MODIFIER_MAP = {"shift": "shift", "ctrl": "ctrl", "alt": "alt", "super": "command", "cmd": "command", "meta": "command", "opt": "option"}
     _mod_text = args.get("text", "").strip().lower() if action not in ("type", "key") else ""
     _modifier = _MODIFIER_MAP.get(_mod_text)
     try:

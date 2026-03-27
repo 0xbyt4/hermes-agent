@@ -99,6 +99,33 @@ Control a macOS desktop via the `computer` tool — screenshots, mouse, keyboard
 | Force quit menu | `command+option+Escape` |
 | Undo | `command+z` |
 | Redo | `command+shift+z` |
+| Screenshot | `command+shift+3` |
+| Screenshot selection | `command+shift+4` (interactive — avoid) |
+| Screenshot/record panel | `command+shift+5` |
+| Lock screen | `command+control+q` (avoid — loses control) |
+
+### macOS Tahoe 26 — Fn/Globe Key Shortcuts
+| Action | Shortcut |
+|--------|----------|
+| Show Desktop | `fn+h` |
+| Show/Hide Dock | `fn+a` |
+| Show/Hide Apps (Launchpad) | `fn+shift+a` |
+| Control Center | `fn+c` |
+| Notification Center | `fn+n` |
+| Start/Stop Dictation | `fn+d` |
+| Emoji/Character Viewer | `fn+e` |
+| Quick Note | `fn+q` |
+
+### Mission Control & Spaces
+| Action | Shortcut |
+|--------|----------|
+| Mission Control | `control+Up` |
+| Application Windows | `control+Down` |
+| Show Desktop (alt) | `fn+f11` |
+| Move to Left Space | `control+Left` |
+| Move to Right Space | `control+Right` |
+
+**IMPORTANT**: Do NOT use `cmd+F3`, `super+F3`, `F11` alone, or `super` key — these are either media keys or invalid key names. Use the shortcuts listed above.
 
 ### Browser (Chrome/Firefox/Safari)
 | Action | Shortcut |
@@ -118,11 +145,22 @@ Control a macOS desktop via the `computer` tool — screenshots, mouse, keyboard
 |--------|----------|
 | New Finder window | `command+n` |
 | New folder | `command+shift+n` |
+| Rename (selected file) | `Return` (enters rename mode) |
 | Get info | `command+i` |
 | Duplicate | `command+d` |
 | Move to trash | `command+Delete` |
 | Go to folder | `command+shift+g` |
 | Show hidden files | `command+shift+.` |
+| Open selected | `command+Down` |
+| Go to parent folder | `command+Up` |
+| Quick Look | `space` |
+| View as icons | `command+1` |
+| View as list | `command+2` |
+| View in columns | `command+3` |
+| Connect to server | `command+k` |
+| Open Home folder | `command+shift+h` |
+| Open Desktop folder | `command+shift+d` |
+| Open Downloads folder | `option+command+l` |
 
 ### Text editing
 | Action | Shortcut |
