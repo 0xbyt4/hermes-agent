@@ -249,21 +249,26 @@ def _execute_action(action: str, args: Dict[str, Any]) -> str:
         if not coordinate:
             return "error: coordinate required for mouse_move"
         pyautogui.moveTo(coordinate[0], coordinate[1], duration=0.3)
-        return f"moved to ({coordinate[0]}, {coordinate[1]})"
+        actual = pyautogui.position()
+        return f"moved to ({actual.x}, {actual.y}). Take a screenshot to verify cursor is on the correct element before clicking."
 
     if action == "left_click":
         if coordinate:
             pyautogui.click(coordinate[0], coordinate[1])
-            return f"clicked at ({coordinate[0]}, {coordinate[1]})"
+            pos = pyautogui.position()
+            return f"clicked at ({pos.x}, {pos.y}). Take screenshot to verify the click result."
         pyautogui.click()
-        return "clicked at current position"
+        pos = pyautogui.position()
+        return f"clicked at current position ({pos.x}, {pos.y}). Take screenshot to verify."
 
     if action == "right_click":
         if coordinate:
             pyautogui.rightClick(coordinate[0], coordinate[1])
-            return f"right-clicked at ({coordinate[0]}, {coordinate[1]})"
+            pos = pyautogui.position()
+            return f"right-clicked at ({pos.x}, {pos.y}). Take screenshot to see the context menu."
         pyautogui.rightClick()
-        return "right-clicked at current position"
+        pos = pyautogui.position()
+        return f"right-clicked at current position ({pos.x}, {pos.y}). Take screenshot to see the menu."
 
     if action == "double_click":
         if coordinate:
