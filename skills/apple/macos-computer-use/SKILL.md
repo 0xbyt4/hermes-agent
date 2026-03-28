@@ -330,6 +330,27 @@ Use cases:
 - Move windows: drag from title bar
 - Resize windows: drag from window edges
 
+### Multi-file drag (rubber band selection):
+To move multiple files at once, use a two-step drag approach:
+
+```
+1. screenshot — see files on screen
+2. Rubber band select: left_click_drag from EMPTY SPACE at one corner to
+   opposite corner, enclosing all target files
+   (start_coordinate must be on empty background, not on any file icon)
+3. screenshot — verify files are selected (highlighted)
+4. zoom on one of the selected file icons — find exact center
+5. left_click_drag from selected file icon center to destination folder
+   (dragging any selected file moves ALL selected files)
+6. screenshot — verify all files moved
+```
+
+**Important rules for multi-file drag:**
+- Step 2 MUST start from empty space — starting on a file icon will drag that single file instead of creating a selection rectangle
+- Step 5 MUST start from a selected file's icon center — starting from empty space will deselect and create a new selection rectangle
+- Do NOT click between step 2 and step 5 — any click on empty space deselects all files
+- Alternative: use `left_click` then `left_click text=cmd` on each file for non-contiguous selection, then `left_click_drag` from any selected file
+
 ## Reading Screen Content
 
 - The agent reads text directly from screenshots via vision
@@ -560,7 +581,7 @@ METHOD 2 — Context menu:
 9. key: Return
 ```
 
-### Drag a file:
+### Drag a single file:
 ```
 1. screenshot — see files
 2. zoom on source file icon — find exact center coordinates
@@ -568,4 +589,16 @@ METHOD 2 — Context menu:
 4. left_click_drag start_coordinate=[icon_center] end_coordinate=[target_center]
    (MUST use left_click_drag — never decompose into mouse_down + move + mouse_up)
 5. screenshot — verify file moved
+```
+
+### Drag multiple files (rubber band + drag):
+```
+1. screenshot — identify files to move and an empty corner nearby
+2. left_click_drag start_coordinate=[empty_corner] end_coordinate=[opposite_corner]
+   — rubber band selects all enclosed files
+3. screenshot — verify selection (files highlighted)
+4. zoom on one selected file — find icon center
+5. left_click_drag start_coordinate=[selected_icon_center] end_coordinate=[target_folder]
+   — all selected files move together
+6. screenshot — verify files moved
 ```
