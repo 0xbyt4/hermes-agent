@@ -943,34 +943,40 @@ class TelegramAdapter(BasePlatformAdapter):
         """Send audio as a native Telegram voice message or audio file."""
         if not self._bot:
             return SendResult(success=False, error="Not connected")
-        
+
         try:
             import os
             if not os.path.exists(audio_path):
                 return SendResult(success=False, error=f"Audio file not found: {audio_path}")
-            
-            with open(audio_path, "rb") as audio_file:
-                # .ogg files -> send as voice (round playable bubble)
-                if audio_path.endswith(".ogg") or audio_path.endswith(".opus"):
-                    _voice_thread = metadata.get("thread_id") if metadata else None
-                    msg = await self._bot.send_voice(
-                        chat_id=int(chat_id),
-                        voice=audio_file,
-                        caption=caption[:1024] if caption else None,
-                        reply_to_message_id=int(reply_to) if reply_to else None,
-                        message_thread_id=int(_voice_thread) if _voice_thread else None,
-                    )
-                else:
-                    # .mp3 and others -> send as audio file
-                    _audio_thread = metadata.get("thread_id") if metadata else None
-                    msg = await self._bot.send_audio(
-                        chat_id=int(chat_id),
-                        audio=audio_file,
-                        caption=caption[:1024] if caption else None,
-                        reply_to_message_id=int(reply_to) if reply_to else None,
-                        message_thread_id=int(_audio_thread) if _audio_thread else None,
-                    )
-            return SendResult(success=True, message_id=str(msg.message_id))
+
+            _thread = metadata.get("thread_id") if metadata else None
+            for _attempt in range(2):
+                try:
+                    _tid = int(_thread) if _thread else None
+                    with open(audio_path, "rb") as audio_file:
+                        if audio_path.endswith(".ogg") or audio_path.endswith(".opus"):
+                            msg = await self._bot.send_voice(
+                                chat_id=int(chat_id),
+                                voice=audio_file,
+                                caption=caption[:1024] if caption else None,
+                                reply_to_message_id=int(reply_to) if reply_to else None,
+                                message_thread_id=_tid,
+                            )
+                        else:
+                            msg = await self._bot.send_audio(
+                                chat_id=int(chat_id),
+                                audio=audio_file,
+                                caption=caption[:1024] if caption else None,
+                                reply_to_message_id=int(reply_to) if reply_to else None,
+                                message_thread_id=_tid,
+                            )
+                    return SendResult(success=True, message_id=str(msg.message_id))
+                except Exception as _e:
+                    if "thread not found" in str(_e).lower() and _thread is not None:
+                        logger.warning("[%s] Thread %s not found in send_voice, retrying without thread", self.name, _thread)
+                        _thread = None
+                        continue
+                    raise
         except Exception as e:
             logger.error(
                 "[%s] Failed to send Telegram voice/audio, falling back to base adapter: %s",
@@ -999,15 +1005,24 @@ class TelegramAdapter(BasePlatformAdapter):
                 return SendResult(success=False, error=f"Image file not found: {image_path}")
 
             _thread = metadata.get("thread_id") if metadata else None
-            with open(image_path, "rb") as image_file:
-                msg = await self._bot.send_photo(
-                    chat_id=int(chat_id),
-                    photo=image_file,
-                    caption=caption[:1024] if caption else None,
-                    reply_to_message_id=int(reply_to) if reply_to else None,
-                    message_thread_id=int(_thread) if _thread else None,
-                )
-            return SendResult(success=True, message_id=str(msg.message_id))
+            for _attempt in range(2):
+                try:
+                    _tid = int(_thread) if _thread else None
+                    with open(image_path, "rb") as image_file:
+                        msg = await self._bot.send_photo(
+                            chat_id=int(chat_id),
+                            photo=image_file,
+                            caption=caption[:1024] if caption else None,
+                            reply_to_message_id=int(reply_to) if reply_to else None,
+                            message_thread_id=_tid,
+                        )
+                    return SendResult(success=True, message_id=str(msg.message_id))
+                except Exception as _e:
+                    if "thread not found" in str(_e).lower() and _thread is not None:
+                        logger.warning("[%s] Thread %s not found in send_image_file, retrying without thread", self.name, _thread)
+                        _thread = None
+                        continue
+                    raise
         except Exception as e:
             logger.error(
                 "[%s] Failed to send Telegram local image, falling back to base adapter: %s",
@@ -1037,19 +1052,27 @@ class TelegramAdapter(BasePlatformAdapter):
 
             display_name = file_name or os.path.basename(file_path)
             _thread = metadata.get("thread_id") if metadata else None
-
-            with open(file_path, "rb") as f:
-                msg = await self._bot.send_document(
-                    chat_id=int(chat_id),
-                    document=f,
-                    filename=display_name,
-                    caption=caption[:1024] if caption else None,
-                    reply_to_message_id=int(reply_to) if reply_to else None,
-                    message_thread_id=int(_thread) if _thread else None,
-                )
-            return SendResult(success=True, message_id=str(msg.message_id))
+            for _attempt in range(2):
+                try:
+                    _tid = int(_thread) if _thread else None
+                    with open(file_path, "rb") as f:
+                        msg = await self._bot.send_document(
+                            chat_id=int(chat_id),
+                            document=f,
+                            filename=display_name,
+                            caption=caption[:1024] if caption else None,
+                            reply_to_message_id=int(reply_to) if reply_to else None,
+                            message_thread_id=_tid,
+                        )
+                    return SendResult(success=True, message_id=str(msg.message_id))
+                except Exception as _e:
+                    if "thread not found" in str(_e).lower() and _thread is not None:
+                        logger.warning("[%s] Thread %s not found in send_document, retrying without thread", self.name, _thread)
+                        _thread = None
+                        continue
+                    raise
         except Exception as e:
-            print(f"[{self.name}] Failed to send document: {e}")
+            logger.error("[%s] Failed to send document: %s", self.name, e)
             return await super().send_document(chat_id, file_path, caption, file_name, reply_to)
 
     async def send_video(
@@ -1070,17 +1093,26 @@ class TelegramAdapter(BasePlatformAdapter):
                 return SendResult(success=False, error=f"Video file not found: {video_path}")
 
             _thread = metadata.get("thread_id") if metadata else None
-            with open(video_path, "rb") as f:
-                msg = await self._bot.send_video(
-                    chat_id=int(chat_id),
-                    video=f,
-                    caption=caption[:1024] if caption else None,
-                    reply_to_message_id=int(reply_to) if reply_to else None,
-                    message_thread_id=int(_thread) if _thread else None,
-                )
-            return SendResult(success=True, message_id=str(msg.message_id))
+            for _attempt in range(2):
+                try:
+                    _tid = int(_thread) if _thread else None
+                    with open(video_path, "rb") as f:
+                        msg = await self._bot.send_video(
+                            chat_id=int(chat_id),
+                            video=f,
+                            caption=caption[:1024] if caption else None,
+                            reply_to_message_id=int(reply_to) if reply_to else None,
+                            message_thread_id=_tid,
+                        )
+                    return SendResult(success=True, message_id=str(msg.message_id))
+                except Exception as _e:
+                    if "thread not found" in str(_e).lower() and _thread is not None:
+                        logger.warning("[%s] Thread %s not found in send_video, retrying without thread", self.name, _thread)
+                        _thread = None
+                        continue
+                    raise
         except Exception as e:
-            print(f"[{self.name}] Failed to send video: {e}")
+            logger.error("[%s] Failed to send video: %s", self.name, e)
             return await super().send_video(chat_id, video_path, caption, reply_to)
 
     async def send_image(
@@ -1100,16 +1132,24 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
         
         try:
-            # Telegram can send photos directly from URLs (up to ~5MB)
             _photo_thread = metadata.get("thread_id") if metadata else None
-            msg = await self._bot.send_photo(
-                chat_id=int(chat_id),
-                photo=image_url,
-                caption=caption[:1024] if caption else None,  # Telegram caption limit
-                reply_to_message_id=int(reply_to) if reply_to else None,
-                message_thread_id=int(_photo_thread) if _photo_thread else None,
-            )
-            return SendResult(success=True, message_id=str(msg.message_id))
+            for _attempt in range(2):
+                try:
+                    _tid = int(_photo_thread) if _photo_thread else None
+                    msg = await self._bot.send_photo(
+                        chat_id=int(chat_id),
+                        photo=image_url,
+                        caption=caption[:1024] if caption else None,
+                        reply_to_message_id=int(reply_to) if reply_to else None,
+                        message_thread_id=_tid,
+                    )
+                    return SendResult(success=True, message_id=str(msg.message_id))
+                except Exception as _e:
+                    if "thread not found" in str(_e).lower() and _photo_thread is not None:
+                        logger.warning("[%s] Thread %s not found in send_image, retrying without thread", self.name, _photo_thread)
+                        _photo_thread = None
+                        continue
+                    raise
         except Exception as e:
             logger.warning(
                 "[%s] URL-based send_photo failed, trying file upload: %s",
@@ -1124,7 +1164,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     resp = await client.get(image_url)
                     resp.raise_for_status()
                     image_data = resp.content
-                
+
                 msg = await self._bot.send_photo(
                     chat_id=int(chat_id),
                     photo=image_data,
@@ -1156,14 +1196,23 @@ class TelegramAdapter(BasePlatformAdapter):
         
         try:
             _anim_thread = metadata.get("thread_id") if metadata else None
-            msg = await self._bot.send_animation(
-                chat_id=int(chat_id),
-                animation=animation_url,
-                caption=caption[:1024] if caption else None,
-                reply_to_message_id=int(reply_to) if reply_to else None,
-                message_thread_id=int(_anim_thread) if _anim_thread else None,
-            )
-            return SendResult(success=True, message_id=str(msg.message_id))
+            for _attempt in range(2):
+                try:
+                    _tid = int(_anim_thread) if _anim_thread else None
+                    msg = await self._bot.send_animation(
+                        chat_id=int(chat_id),
+                        animation=animation_url,
+                        caption=caption[:1024] if caption else None,
+                        reply_to_message_id=int(reply_to) if reply_to else None,
+                        message_thread_id=_tid,
+                    )
+                    return SendResult(success=True, message_id=str(msg.message_id))
+                except Exception as _e:
+                    if "thread not found" in str(_e).lower() and _anim_thread is not None:
+                        logger.warning("[%s] Thread %s not found in send_animation, retrying without thread", self.name, _anim_thread)
+                        _anim_thread = None
+                        continue
+                    raise
         except Exception as e:
             logger.error(
                 "[%s] Failed to send Telegram animation, falling back to photo: %s",
