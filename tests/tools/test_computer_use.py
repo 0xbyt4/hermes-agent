@@ -662,3 +662,380 @@ class TestStubSchema:
                     "start_coordinate", "end_coordinate"]
         for param in expected:
             assert param in props, f"Missing parameter: {param}"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# New tests for bug fixes and features added in this branch
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestStringArgCasting:
+    """Gateway sends numeric args as strings. Verify int/float casting."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_pyautogui(self):
+        self.mock_pag = MagicMock()
+        self.mock_pag.FAILSAFE = True
+        with patch.dict("sys.modules", {"pyautogui": self.mock_pag}):
+            yield
+
+    def test_wait_string_duration(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("wait", {"duration": "2"})
+        assert "waited" in result
+
+    def test_wait_float_string_duration(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("wait", {"duration": "0.5"})
+        assert "waited" in result
+
+    def test_scroll_string_amount(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("scroll", {"scroll_direction": "down", "scroll_amount": "5"})
+        self.mock_pag.scroll.assert_called_once_with(-5)
+        assert "scrolled" in result
+
+    def test_hold_key_string_duration(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("hold_key", {"key": "shift", "duration": "0.1"})
+        self.mock_pag.keyDown.assert_called_once_with("shift")
+        assert "held" in result
+
+
+class TestKeyNormalization:
+    """Key names are auto-normalized: cmd->command, Return->return, etc."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_pyautogui(self):
+        self.mock_pag = MagicMock()
+        self.mock_pag.FAILSAFE = True
+        with patch.dict("sys.modules", {"pyautogui": self.mock_pag}):
+            yield
+
+    def test_cmd_normalized_to_command(self):
+        from tools.computer_use_tool import _execute_action
+        _execute_action("key", {"text": "cmd+n"})
+        self.mock_pag.hotkey.assert_called_once_with("command", "n", interval=0.04)
+
+    def test_super_normalized_to_command(self):
+        from tools.computer_use_tool import _execute_action
+        _execute_action("key", {"text": "super+space"})
+        self.mock_pag.hotkey.assert_called_once_with("command", "space", interval=0.04)
+
+    def test_Return_lowercased(self):
+        from tools.computer_use_tool import _execute_action
+        _execute_action("key", {"text": "Return"})
+        self.mock_pag.press.assert_called_once_with("return")
+
+    def test_ESCAPE_lowercased(self):
+        from tools.computer_use_tool import _execute_action
+        _execute_action("key", {"text": "ESCAPE"})
+        self.mock_pag.press.assert_called_once_with("escape")
+
+    def test_delete_normalized_to_backspace(self):
+        from tools.computer_use_tool import _execute_action
+        _execute_action("key", {"text": "delete"})
+        self.mock_pag.press.assert_called_once_with("backspace")
+
+    def test_hold_key_cmd_normalized(self):
+        from tools.computer_use_tool import _execute_action
+        _execute_action("hold_key", {"key": "cmd", "duration": 0.01})
+        self.mock_pag.keyDown.assert_called_once_with("command")
+
+    def test_key_name_map_completeness(self):
+        """All expected aliases must be in _KEY_NAME_MAP."""
+        from tools.computer_use_tool import _KEY_NAME_MAP
+        expected = {"cmd", "super", "meta", "win", "opt", "control",
+                    "delete", "page_up", "page_down",
+                    "arrow_up", "arrow_down", "arrow_left", "arrow_right"}
+        assert expected.issubset(set(_KEY_NAME_MAP.keys()))
+
+
+class TestBlockedKeyCombos:
+    """Irreversible key combos must be blocked at code level."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_pyautogui(self):
+        self.mock_pag = MagicMock()
+        self.mock_pag.FAILSAFE = True
+        with patch.dict("sys.modules", {"pyautogui": self.mock_pag}):
+            yield
+
+    def test_empty_trash_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("key", {"text": "command+shift+backspace"})
+        assert "blocked" in result
+        self.mock_pag.hotkey.assert_not_called()
+
+    def test_force_delete_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("key", {"text": "command+option+backspace"})
+        assert "blocked" in result
+
+    def test_lock_screen_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("key", {"text": "command+control+q"})
+        assert "blocked" in result
+
+    def test_log_out_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("key", {"text": "command+shift+q"})
+        assert "blocked" in result
+
+    def test_force_log_out_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("key", {"text": "command+option+shift+q"})
+        assert "blocked" in result
+
+    def test_cmd_alias_also_blocked(self):
+        """cmd+shift+q should be blocked same as command+shift+q."""
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("key", {"text": "cmd+shift+q"})
+        assert "blocked" in result
+
+    def test_quit_app_not_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("key", {"text": "command+q"})
+        assert "blocked" not in result
+        assert "pressed" in result
+
+    def test_trash_not_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("key", {"text": "command+backspace"})
+        assert "blocked" not in result
+
+    def test_force_quit_menu_not_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("key", {"text": "command+option+escape"})
+        assert "blocked" not in result
+
+
+class TestQuartzDrag:
+    """Test _quartz_drag and left_click_drag action."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_deps(self):
+        self.mock_pag = MagicMock()
+        self.mock_pag.FAILSAFE = True
+        with patch.dict("sys.modules", {"pyautogui": self.mock_pag}):
+            yield
+
+    def test_drag_calls_quartz_drag(self):
+        from tools.computer_use_tool import _execute_action
+        with patch("tools.computer_use_tool._quartz_drag") as mock_drag:
+            result = _execute_action("left_click_drag", {
+                "start_coordinate": [100, 200],
+                "coordinate": [400, 500],
+            })
+            mock_drag.assert_called_once_with(100, 200, 400, 500)
+            assert "dragged" in result
+
+    def test_drag_start_equals_end_rejected(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("left_click_drag", {
+            "start_coordinate": [100, 200],
+            "coordinate": [100, 200],
+        })
+        assert "identical" in result
+
+    def test_drag_missing_end_coordinate(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("left_click_drag", {
+            "start_coordinate": [100, 200],
+        })
+        assert "error" in result
+
+    def test_drag_coordinate_fallback(self):
+        """When end_coordinate is absent, coordinate is used as end."""
+        from tools.computer_use_tool import _execute_action
+        with patch("tools.computer_use_tool._quartz_drag") as mock_drag:
+            _execute_action("left_click_drag", {
+                "start_coordinate": [10, 20],
+                "coordinate": [30, 40],
+            })
+            mock_drag.assert_called_once_with(10, 20, 30, 40)
+
+    def test_drag_end_coordinate_preferred(self):
+        """end_coordinate takes precedence over coordinate."""
+        from tools.computer_use_tool import _execute_action
+        with patch("tools.computer_use_tool._quartz_drag") as mock_drag:
+            _execute_action("left_click_drag", {
+                "start_coordinate": [10, 20],
+                "coordinate": [30, 40],
+                "end_coordinate": [50, 60],
+            })
+            mock_drag.assert_called_once_with(10, 20, 50, 60)
+
+
+class TestMouseMoveDragAware:
+    """mouse_move sends drag events when button is held."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_deps(self):
+        self.mock_pag = MagicMock()
+        self.mock_pag.FAILSAFE = True
+        self.mock_quartz = MagicMock()
+        with patch.dict("sys.modules", {
+            "pyautogui": self.mock_pag,
+            "Quartz": self.mock_quartz,
+        }):
+            yield
+
+    def test_normal_move_uses_pyautogui(self):
+        """When button NOT held, use regular pyautogui.moveTo."""
+        self.mock_quartz.CGEventSourceButtonState.return_value = False
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("mouse_move", {"coordinate": [500, 300]})
+        self.mock_pag.moveTo.assert_called_once_with(500, 300, duration=0.3)
+        assert "moved to" in result
+
+    def test_drag_move_uses_quartz(self):
+        """When button IS held, send kCGEventLeftMouseDragged via Quartz."""
+        self.mock_quartz.CGEventSourceButtonState.return_value = True
+        pos = MagicMock()
+        pos.x = 100
+        pos.y = 100
+        pos.__iter__ = MagicMock(return_value=iter([100, 100]))
+        self.mock_pag.position.return_value = pos
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("mouse_move", {"coordinate": [500, 300]})
+        # Should NOT use pyautogui.moveTo
+        self.mock_pag.moveTo.assert_not_called()
+        # Should use Quartz CGEventPost with drag events
+        assert self.mock_quartz.CGEventCreateMouseEvent.call_count > 0
+        assert self.mock_quartz.CGEventPost.call_count > 0
+        assert "moved to" in result
+
+
+class TestImageEviction:
+    """Old screenshots are evicted from API calls to save tokens."""
+
+    def test_keeps_only_max_images(self):
+        from agent.anthropic_adapter import convert_messages_to_anthropic
+        messages = []
+        for i in range(10):
+            messages.append({
+                "role": "assistant", "content": None,
+                "tool_calls": [{"id": f"call_{i}", "type": "function",
+                    "function": {"name": "computer", "arguments": '{"action":"screenshot"}'}}]
+            })
+            messages.append({
+                "role": "tool", "content": f"Screenshot {i}",
+                "tool_call_id": f"call_{i}",
+                "_anthropic_content_blocks": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "X" * 100}}
+                ]
+            })
+
+        _, result = convert_messages_to_anthropic(messages)
+
+        images = 0
+        placeholders = 0
+        for msg in result:
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        inner = block.get("content", [])
+                        if isinstance(inner, list):
+                            for b in inner:
+                                if isinstance(b, dict):
+                                    if b.get("type") == "image":
+                                        images += 1
+                                    if "removed" in str(b.get("text", "")):
+                                        placeholders += 1
+        assert images == 1, f"Expected 1 kept image, got {images}"
+        assert placeholders == 9, f"Expected 9 placeholders, got {placeholders}"
+
+    def test_preserves_text_blocks(self):
+        """Text blocks inside tool_result should survive eviction."""
+        from agent.anthropic_adapter import convert_messages_to_anthropic
+        messages = [
+            {"role": "assistant", "content": None,
+             "tool_calls": [{"id": "c1", "type": "function",
+                 "function": {"name": "computer", "arguments": '{"action":"screenshot"}'}}]},
+            {"role": "tool", "content": "Screenshot taken MEDIA:/tmp/test.png",
+             "tool_call_id": "c1",
+             "_anthropic_content_blocks": [
+                 {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "XX"}}
+             ]},
+            {"role": "assistant", "content": None,
+             "tool_calls": [{"id": "c2", "type": "function",
+                 "function": {"name": "computer", "arguments": '{"action":"screenshot"}'}}]},
+            {"role": "tool", "content": "Screenshot 2 MEDIA:/tmp/test2.png",
+             "tool_call_id": "c2",
+             "_anthropic_content_blocks": [
+                 {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "YY"}}
+             ]},
+        ]
+
+        _, result = convert_messages_to_anthropic(messages)
+
+        # First screenshot (older) should have text preserved but image replaced
+        for msg in result:
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        inner = block.get("content", [])
+                        if isinstance(inner, list):
+                            texts = [b.get("text", "") for b in inner if b.get("type") == "text"]
+                            all_text = " ".join(texts)
+                            if "Screenshot taken" in all_text:
+                                # Old screenshot: image should be replaced
+                                has_image = any(b.get("type") == "image" for b in inner)
+                                assert not has_image, "Old screenshot should have image replaced"
+
+
+class TestRequirementsQuartz:
+    """check_computer_use_requirements must check Quartz import."""
+
+    @patch("sys.platform", "darwin")
+    def test_quartz_missing_returns_false(self):
+        import importlib
+        mock_pag = MagicMock()
+        with patch.dict("sys.modules", {"pyautogui": mock_pag, "Quartz": None}):
+            import tools.computer_use_tool as mod
+            # Force Quartz import to fail
+            original_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+            def mock_import(name, *args, **kwargs):
+                if name == "Quartz":
+                    raise ImportError("No Quartz")
+                return original_import(name, *args, **kwargs)
+            with patch("builtins.__import__", side_effect=mock_import):
+                assert mod.check_computer_use_requirements() is False
+
+
+class TestBasicActions:
+    """Basic action coverage for right_click, double_click, triple_click."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_pyautogui(self):
+        self.mock_pag = MagicMock()
+        self.mock_pag.FAILSAFE = True
+        with patch.dict("sys.modules", {"pyautogui": self.mock_pag}):
+            yield
+
+    def test_right_click_with_coordinate(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("right_click", {"coordinate": [100, 200]})
+        self.mock_pag.rightClick.assert_called_once_with(100, 200)
+        assert "right-clicked" in result
+
+    def test_double_click_with_coordinate(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("double_click", {"coordinate": [100, 200]})
+        self.mock_pag.doubleClick.assert_called_once_with(100, 200)
+        assert "double-clicked" in result
+
+    def test_triple_click_with_coordinate(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("triple_click", {"coordinate": [100, 200]})
+        self.mock_pag.tripleClick.assert_called_once_with(100, 200)
+        assert "triple-clicked" in result
+
+    def test_right_click_without_coordinate(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("right_click", {})
+        self.mock_pag.rightClick.assert_called_once()
+        assert "right-clicked" in result
