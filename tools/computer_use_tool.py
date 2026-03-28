@@ -776,11 +776,12 @@ def get_native_tool_definition() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def check_computer_use_requirements() -> bool:
-    """Return True if computer use is available (macOS + pyautogui)."""
+    """Return True if computer use is available (macOS + pyautogui + Quartz)."""
     if sys.platform != "darwin":
         return False
     try:
         import pyautogui  # noqa: F401
+        import Quartz  # noqa: F401  — needed for drag and mouse_move/down/up
         return True
     except ImportError:
         return False

@@ -956,6 +956,17 @@ class AIAgent:
         elif not self.quiet_mode:
             print("🛠️  No tools loaded (all tools filtered out or unavailable)")
         
+        # computer_use requires Anthropic native API (computer_20251124 tool type).
+        # Strip it from non-Anthropic providers where it silently fails.
+        if "computer" in self.valid_tool_names and self.api_mode != "anthropic_messages":
+            self.tools = [
+                t for t in self.tools
+                if t.get("function", {}).get("name") != "computer"
+            ]
+            self.valid_tool_names.discard("computer")
+            if not self.quiet_mode:
+                logger.info("computer_use tool removed — requires Anthropic native API (current: %s)", self.api_mode)
+
         # Check tool requirements
         if self.tools and not self.quiet_mode:
             requirements = check_toolset_requirements()
