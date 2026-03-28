@@ -492,7 +492,7 @@ def _execute_action(action: str, args: Dict[str, Any],
 
     if action == "scroll":
         direction = args.get("scroll_direction", "down")
-        amount = args.get("scroll_amount", 3)
+        amount = int(args.get("scroll_amount", 3))
         if coordinate:
             pyautogui.moveTo(coordinate[0], coordinate[1])
         clicks = amount if direction in ("up", "left") else -amount
@@ -503,7 +503,7 @@ def _execute_action(action: str, args: Dict[str, Any],
         return f"scrolled {direction} by {amount}"
 
     if action == "wait":
-        duration = args.get("duration", 1)
+        duration = float(args.get("duration", 1))
         time.sleep(min(duration, 10))  # Cap at 10 seconds
         return f"waited {duration}s"
 
@@ -536,7 +536,7 @@ def _execute_action(action: str, args: Dict[str, Any],
 
     if action == "hold_key":
         key = args.get("key", text)
-        duration = min(args.get("duration", 1), 5)
+        duration = min(float(args.get("duration", 1)), 5)
         if key:
             key = _KEY_NAME_MAP.get(key.lower(), key.lower())
             pyautogui.keyDown(key)
