@@ -106,19 +106,19 @@ class TestActionExecution:
             # Type uses clipboard paste: pbcopy + Cmd+V
             mock_run.assert_called_once()
             assert mock_run.call_args[0][0] == ["pbcopy"]
-            self.mock_pag.hotkey.assert_called_once_with("command", "v")
+            self.mock_pag.hotkey.assert_called_once_with("command", "v", interval=0.04)
             assert "typed" in result
 
     def test_key_combo(self):
         from tools.computer_use_tool import _execute_action
         result = _execute_action("key", {"key": "ctrl+c"})
-        self.mock_pag.hotkey.assert_called_once_with("ctrl", "c")
+        self.mock_pag.hotkey.assert_called_once_with("ctrl", "c", interval=0.04)
         assert "pressed" in result
 
     def test_single_key(self):
         from tools.computer_use_tool import _execute_action
         result = _execute_action("key", {"key": "Return"})
-        self.mock_pag.press.assert_called_once_with("Return")
+        self.mock_pag.press.assert_called_once_with("return")
         assert "pressed" in result
 
     def test_scroll_down(self):
@@ -265,17 +265,16 @@ class TestDragCoordinates:
         mock_pag = MagicMock()
         mock_pag.FAILSAFE = True
         with patch.dict("sys.modules", {"pyautogui": mock_pag}):
-            result = handle_computer_use({
-                "action": "left_click_drag",
-                "coordinate": [100, 200],
-                "start_coordinate": [100, 200],
-                "end_coordinate": [400, 500],
-            })
-            parsed = json.loads(result)
-            assert parsed.get("success") is True
-            mock_pag.moveTo.assert_called()
-            mock_pag.mouseDown.assert_called_once()
-            mock_pag.mouseUp.assert_called_once()
+            with patch("tools.computer_use_tool._quartz_drag") as mock_drag:
+                result = handle_computer_use({
+                    "action": "left_click_drag",
+                    "coordinate": [100, 200],
+                    "start_coordinate": [100, 200],
+                    "end_coordinate": [400, 500],
+                })
+                parsed = json.loads(result)
+                assert parsed.get("success") is True
+                mock_drag.assert_called_once_with(100, 200, 400, 500)
 
 
 class TestScrollDirection:
@@ -352,33 +351,42 @@ class TestMiddleClick:
 
 
 class TestMouseDownUp:
-    """Test left_mouse_down and left_mouse_up actions."""
+    """Test left_mouse_down and left_mouse_up actions (Quartz-based)."""
 
     @pytest.fixture(autouse=True)
-    def _mock_pyautogui(self):
+    def _mock_deps(self):
+        """Inject mock pyautogui and Quartz into the module before each test."""
         self.mock_pag = MagicMock()
         self.mock_pag.FAILSAFE = True
-        with patch.dict("sys.modules", {"pyautogui": self.mock_pag}):
+        self.mock_quartz = MagicMock()
+        with patch.dict("sys.modules", {
+            "pyautogui": self.mock_pag,
+            "Quartz": self.mock_quartz,
+        }):
             yield
 
     def test_mouse_down_with_coordinate(self):
         from tools.computer_use_tool import _execute_action
         result = _execute_action("left_mouse_down", {"coordinate": [200, 400]})
-        self.mock_pag.moveTo.assert_called_once_with(200, 400)
-        self.mock_pag.mouseDown.assert_called_once()
+        # Quartz sends MouseMoved + LeftMouseDown = 2 events
+        assert self.mock_quartz.CGEventCreateMouseEvent.call_count == 2
+        assert self.mock_quartz.CGEventPost.call_count == 2
         assert "pressed down" in result
 
     def test_mouse_down_without_coordinate(self):
         from tools.computer_use_tool import _execute_action
         result = _execute_action("left_mouse_down", {})
-        self.mock_pag.moveTo.assert_not_called()
-        self.mock_pag.mouseDown.assert_called_once()
+        self.mock_pag.position.assert_called_once()
+        assert self.mock_quartz.CGEventCreateMouseEvent.call_count == 2
+        assert self.mock_quartz.CGEventPost.call_count == 2
         assert "pressed down" in result
 
     def test_mouse_up(self):
         from tools.computer_use_tool import _execute_action
         result = _execute_action("left_mouse_up", {})
-        self.mock_pag.mouseUp.assert_called_once()
+        self.mock_pag.position.assert_called_once()
+        self.mock_quartz.CGEventCreateMouseEvent.assert_called_once()
+        self.mock_quartz.CGEventPost.assert_called_once()
         assert "released" in result
 
 

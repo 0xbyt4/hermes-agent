@@ -16,6 +16,13 @@ metadata:
 
 Control a macOS desktop via the `computer` tool — screenshots, mouse, keyboard, scrolling, drag-and-drop. This tool uses Anthropic's Computer Use API.
 
+## Requirements
+
+- **macOS only** — uses Quartz framework and `screencapture` command (Linux/Windows: tool is not loaded)
+- **Anthropic native API only** — requires `computer_20251124` tool type via `beta.messages` API. Does NOT work with OpenRouter, OpenAI, or other chat_completions providers (tool is automatically removed from tool surface)
+- **pyautogui + pyobjc** — install with `pip install -e '.[computer-use]'`
+- **macOS permissions** — Screen Recording + Accessibility (see Accessibility Permissions section)
+
 ## Golden Rules
 
 1. **Screenshot first** — always see the screen before acting
@@ -80,11 +87,49 @@ The cursor is your primary tool for interacting with any visible UI element — 
 - `left_click` without coordinates clicks at current position — no guessing
 - If cursor is wrong, adjust with another `mouse_move` before clicking
 
-### Click types:
-- **`left_click`** — standard click (buttons, menus, links)
-- **`double_click`** — open files/folders in Finder, select a word in text
-- **`right_click`** — open context menus
-- **`triple_click`** — select entire line/paragraph
+### All available actions:
+
+| Action | Purpose |
+|--------|---------|
+| `screenshot` | Capture current screen state |
+| `mouse_move` | Move cursor to coordinates (drag-aware: sends drag events if button held) |
+| `left_click` | Standard click (buttons, menus, links) |
+| `right_click` | Open context menus |
+| `double_click` | Open files/folders, select a word in text |
+| `triple_click` | Select entire line/paragraph |
+| `middle_click` | Middle mouse button click |
+| `left_click_drag` | Atomic drag operation (file move, rubber band select, window resize) |
+| `left_mouse_down` | Press and hold left button (Quartz-based) |
+| `left_mouse_up` | Release left button (Quartz-based) |
+| `type` | Type text via clipboard paste (works with all keyboard layouts and Unicode) |
+| `key` | Press key or key combo (e.g. `command+c`, `Return`, `Escape`) |
+| `hold_key` | Press and hold a key for a duration (e.g. hold `shift` for 2s) |
+| `scroll` | Scroll up/down/left/right at coordinates |
+| `zoom` | Inspect a small screen region at full resolution |
+| `wait` | Pause execution (max 10s per call) |
+
+**Note**: `left_mouse_down` / `left_mouse_up` exist but should NOT be used for drag operations — use `left_click_drag` instead. These are for edge cases only.
+
+### Modifier clicks:
+Click actions accept a `text` parameter to hold a modifier key during the click:
+```
+computer action=left_click, coordinate=[500, 300], text=cmd     — Command+Click (e.g. multi-select in Finder)
+computer action=left_click, coordinate=[500, 300], text=shift   — Shift+Click (e.g. range select)
+computer action=left_click, coordinate=[500, 300], text=ctrl    — Control+Click (same as right-click on macOS)
+computer action=left_click, coordinate=[500, 300], text=alt     — Option+Click
+```
+Modifiers also work with `right_click`, `double_click`, and `scroll`.
+
+### Key name normalization:
+Key names are auto-normalized — all of these are valid and equivalent:
+| Input | Normalized to |
+|-------|--------------|
+| `cmd`, `super`, `meta`, `win` | `command` |
+| `control` | `ctrl` |
+| `opt` | `option` |
+| `delete` | `backspace` |
+| `arrow_up/down/left/right` | `up/down/left/right` |
+| `Return`, `ESCAPE`, `F3` | `return`, `escape`, `f3` (auto-lowercased) |
 
 ### Coordinate reference:
 - **Dock icons**: y > 820 (on 1300x845 screenshot)
