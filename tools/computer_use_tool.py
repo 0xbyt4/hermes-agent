@@ -75,6 +75,17 @@ _SAFE_ACTIONS = frozenset({"screenshot", "mouse_move", "wait", "zoom"})
 
 ALL_ACTIONS = sorted(_DESTRUCTIVE_ACTIONS | _SAFE_ACTIONS)
 
+# Blocked key combinations — irreversible actions that cause data loss or
+# loss of control. The agent prompt discourages these but prompt-level
+# guardrails can be bypassed; this is a hard code-level block.
+_BLOCKED_KEY_COMBOS = {
+    frozenset({"command", "shift", "backspace"}),       # Empty Trash — permanent deletion
+    frozenset({"command", "option", "backspace"}),      # Force delete — bypasses Trash
+    frozenset({"command", "ctrl", "q"}),               # Lock screen — loses all control
+    frozenset({"command", "shift", "q"}),               # Log out — terminates session
+    frozenset({"command", "option", "shift", "q"}),     # Force log out — no save prompt
+}
+
 # pyautogui key name normalization.
 # Claude sends "cmd" but pyautogui requires "command" (keycode 55).
 # Without this mapping, pyautogui.hotkey("cmd", "n") silently drops
@@ -463,6 +474,9 @@ def _execute_action(action: str, args: Dict[str, Any],
         # Claude often sends PascalCase or uppercase keys which pyautogui
         # silently drops (no keycode found), so we lowercase everything.
         keys = [_KEY_NAME_MAP.get(k.lower(), k.lower()) for k in raw_keys]
+        # Block irreversible key combos (empty trash, lock screen, log out)
+        if frozenset(keys) in _BLOCKED_KEY_COMBOS:
+            return f"error: key combo '{'+'.join(keys)}' is blocked — irreversible action"
         if len(keys) == 1:
             pyautogui.press(keys[0])
         else:
