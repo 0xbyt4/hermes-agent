@@ -29,9 +29,16 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from hermes_constants import get_hermes_home
+
 logger = logging.getLogger(__name__)
+
+# Debug log path — use hermes logs directory instead of world-readable /tmp
+_DEBUG_LOG_DIR = get_hermes_home() / "logs"
+_DEBUG_LOG_PATH = _DEBUG_LOG_DIR / "computer_debug.log"
 
 # Approval callback — registered by CLI at startup for prompt_toolkit integration.
 # Same pattern as terminal_tool._approval_callback.
@@ -517,6 +524,7 @@ def _execute_action(action: str, args: Dict[str, Any],
         key = args.get("key", text)
         duration = min(args.get("duration", 1), 5)
         if key:
+            key = _KEY_NAME_MAP.get(key.lower(), key.lower())
             pyautogui.keyDown(key)
             time.sleep(duration)
             pyautogui.keyUp(key)
@@ -538,12 +546,13 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     """
     action = args.get("action", "")
 
-    # Debug log every tool call to /tmp/hermes_computer_debug.log
+    # Debug log every tool call
     try:
         import pyautogui as _dbg_pag
         _dbg_pos = _dbg_pag.position()
         _dbg_line = f"{time.strftime('%H:%M:%S')} action={action} args={json.dumps({k:v for k,v in args.items() if k != 'action'}, default=str)[:200]} cursor_before=({_dbg_pos.x},{_dbg_pos.y})\n"
-        with open("/tmp/hermes_computer_debug.log", "a") as _dbg_f:
+        _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_DEBUG_LOG_PATH, "a") as _dbg_f:
             _dbg_f.write(_dbg_line)
     except Exception:
         pass
@@ -616,7 +625,8 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             _text_summary = f"Screenshot taken ({img_w}x{img_h}).{_cursor_info} MEDIA:{screenshot_path}"
             # Debug: log screenshot result
             try:
-                with open("/tmp/hermes_computer_debug.log", "a") as _dbg_f:
+                _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
+                with open(_DEBUG_LOG_PATH, "a") as _dbg_f:
                     _dbg_f.write(f"  -> result: {_text_summary[:150]}\n")
             except Exception:
                 pass
@@ -689,7 +699,8 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             _zoom_summary = f"Zoomed region ({x1},{y1})-({x2},{y2}) = {crop_w}x{crop_h}px MEDIA:{screenshot_path}"
             # Debug: log zoom result
             try:
-                with open("/tmp/hermes_computer_debug.log", "a") as _dbg_f:
+                _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
+                with open(_DEBUG_LOG_PATH, "a") as _dbg_f:
                     _dbg_f.write(f"  -> result: {_zoom_summary[:150]}\n")
             except Exception:
                 pass
@@ -738,7 +749,8 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     # Debug: log cursor position after action
     try:
         _dbg_pos_after = _pag.position()
-        with open("/tmp/hermes_computer_debug.log", "a") as _dbg_f:
+        _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_DEBUG_LOG_PATH, "a") as _dbg_f:
             _dbg_f.write(f"  -> result: {status[:100]} cursor_after=({_dbg_pos_after.x},{_dbg_pos_after.y})\n")
     except Exception:
         pass
