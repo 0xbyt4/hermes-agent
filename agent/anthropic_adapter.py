@@ -1158,6 +1158,39 @@ def convert_messages_to_anthropic(
             fixed.append(m)
     result = fixed
 
+    # ── Image eviction: keep only the most recent N screenshots ─────
+    # computer_use screenshots (base64 images) sit inside tool_result blocks:
+    #   msg["content"] = [{"type": "tool_result", "content": [{"type": "image", ...}]}]
+    # They accumulate and are sent with every API call. Each costs ~1,465
+    # tokens; after 10+ the conversation becomes very slow even for simple
+    # text queries. Walk backward, keep the most recent MAX_KEEP, replace
+    # older ones with a text placeholder.
+    _MAX_KEEP_IMAGES = 3
+    _image_count = 0
+    for msg in reversed(result):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            inner = block.get("content")
+            if not isinstance(inner, list):
+                continue
+            has_image = any(
+                isinstance(b, dict) and b.get("type") == "image"
+                for b in inner
+            )
+            if not has_image:
+                continue
+            _image_count += 1
+            if _image_count > _MAX_KEEP_IMAGES:
+                block["content"] = [
+                    b if b.get("type") != "image"
+                    else {"type": "text", "text": "[screenshot removed to save context]"}
+                    for b in inner
+                ]
+
     return system, result
 
 
