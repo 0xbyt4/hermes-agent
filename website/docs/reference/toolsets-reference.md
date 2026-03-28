@@ -55,6 +55,7 @@ Or in-session:
 | `browser` | `browser_back`, `browser_cdp`, `browser_click`, `browser_console`, `browser_get_images`, `browser_navigate`, `browser_press`, `browser_scroll`, `browser_snapshot`, `browser_type`, `browser_vision`, `web_search` | Full browser automation. Includes `web_search` as a fallback for quick lookups. `browser_cdp` is a raw CDP passthrough gated on a reachable CDP endpoint — it only appears when `/browser connect` is active or `browser.cdp_url` is set. |
 | `clarify` | `clarify` | Ask the user a question when the agent needs clarification. |
 | `code_execution` | `execute_code` | Run Python scripts that call Hermes tools programmatically. |
+| `computer_use` | `computer` | macOS desktop control via screenshots, mouse, and keyboard (Anthropic native tool). |
 | `cronjob` | `cronjob` | Schedule and manage recurring tasks. |
 | `delegation` | `delegate_task` | Spawn isolated subagent instances for parallel work. |
 | `feishu_doc` | `feishu_doc_read` | Read Feishu/Lark document content. Used by the Feishu document-comment intelligent-reply handler. |
