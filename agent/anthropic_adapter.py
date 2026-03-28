@@ -1163,9 +1163,20 @@ def convert_messages_to_anthropic(
     #   msg["content"] = [{"type": "tool_result", "content": [{"type": "image", ...}]}]
     # They accumulate and are sent with every API call. Each costs ~1,465
     # tokens; after 10+ the conversation becomes very slow even for simple
-    # text queries. Walk backward, keep the most recent MAX_KEEP, replace
-    # older ones with a text placeholder.
-    _MAX_KEEP_IMAGES = 3
+    # text queries. Walk backward, keep the most recent _MAX_KEEP_IMAGES,
+    # replace older ones with a text placeholder.
+    #
+    # Performance vs context trade-off:
+    #   1 (default) — fastest, model only sees the latest screenshot
+    #   2-3         — model can compare before/after states (useful for
+    #                 verifying multi-step UI changes) but adds ~1.5K
+    #                 tokens per extra image, slowing every API call
+    #   5+          — rarely useful, significant latency impact
+    #
+    # The model almost always decides based on the most recent screenshot
+    # alone, so keeping 1 is the best default. Increase only if the agent
+    # needs explicit before/after comparison for a specific workflow.
+    _MAX_KEEP_IMAGES = 1
     _image_count = 0
     for msg in reversed(result):
         content = msg.get("content")
