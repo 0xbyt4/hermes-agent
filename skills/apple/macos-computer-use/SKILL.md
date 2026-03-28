@@ -442,13 +442,13 @@ If Chrome is not running, `open location` launches it first (add extra wait time
 
 When the user requests a screenshot via gateway (Telegram/Discord):
 
-1. `computer action=screenshot` returns `text_summary` containing a `MEDIA:/tmp/hermes_screenshot_<id>.jpg` path (unique per capture)
+1. `computer action=screenshot` returns `text_summary` containing a `MEDIA:/tmp/hermes_screenshot_<id>.png` path (unique per capture)
 2. Extract the exact `MEDIA:` path from `text_summary` and include it in your response text
 3. The gateway extracts this path and sends the image file to the chat
 4. If you omit the MEDIA tag, the user sees no image
 5. Each screenshot creates a new file with a unique ID — old files are cleaned up automatically
 
-Example response: "Here's your screenshot MEDIA:/tmp/hermes_screenshot_a1b2c3d4.jpg — I can see Chrome open with X/Twitter."
+Example response: "Here's your screenshot MEDIA:/tmp/hermes_screenshot_a1b2c3d4.png — I can see Chrome open with X/Twitter."
 
 ## Notification and Dialog Handling
 

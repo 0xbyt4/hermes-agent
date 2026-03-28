@@ -15,13 +15,15 @@ Computer Use is in beta. It requires macOS, the Anthropic provider (`anthropic_m
 
 ## Setup
 
-### 1. Install pyautogui
+### 1. Install dependencies
 
 ```bash
-uv pip install pyautogui
+uv pip install -e '.[computer-use]'
 # or
-pip install pyautogui
+pip install -e '.[computer-use]'
 ```
+
+This installs `pyautogui` and its macOS dependencies (`pyobjc-framework-Quartz`).
 
 ### 2. Grant macOS permissions
 
@@ -34,7 +36,30 @@ After granting permissions, **fully restart Terminal** (not just new tab).
 
 ### 3. Enable the toolset
 
-Add `computer_use` to your platform toolsets in `~/.hermes/config.yaml`:
+**Option A — Interactive setup (recommended):**
+
+```bash
+hermes setup tools
+# or
+hermes tools
+```
+
+Select `computer_use` from the checklist and choose which platforms to enable it for (CLI, Telegram, Discord, Slack, WhatsApp, Signal, Email, DingTalk).
+
+**Option B — CLI command:**
+
+```bash
+# Enable for CLI
+hermes tools enable computer_use --platform cli
+
+# Enable for Telegram
+hermes tools enable computer_use --platform telegram
+
+# Enable for Discord
+hermes tools enable computer_use --platform discord
+```
+
+**Option C — Edit `~/.hermes/config.yaml` manually:**
 
 ```yaml
 platform_toolsets:
@@ -48,10 +73,10 @@ platform_toolsets:
     # ... other toolsets
 ```
 
-Or enable temporarily via CLI flag:
+**Option D — Enable temporarily for one session:**
 
 ```bash
-hermes -t computer_use,hermes-cli
+hermes -t computer_use
 ```
 
 ## How It Works
@@ -73,11 +98,15 @@ The coordinate system matches your logical screen resolution (e.g., 1470×956 on
 | `double_click` | Double-click at position | `coordinate: [x, y]` |
 | `triple_click` | Triple-click (select line) | `coordinate: [x, y]` |
 | `middle_click` | Middle-click at position | `coordinate: [x, y]` |
-| `mouse_move` | Move cursor without clicking | `coordinate: [x, y]` |
-| `left_click_drag` | Drag from A to B | `start_coordinate`, `end_coordinate` |
+| `mouse_move` | Move cursor (drag-aware when button held) | `coordinate: [x, y]` |
+| `left_click_drag` | Atomic drag from A to B | `start_coordinate`, `coordinate` |
+| `left_mouse_down` | Press and hold left button | `coordinate: [x, y]` |
+| `left_mouse_up` | Release left button | — |
 | `type` | Type text (via clipboard paste) | `text: "hello"` |
 | `key` | Press key or shortcut | `key: "command+l"` |
+| `hold_key` | Press and hold a key for duration | `key: "shift"`, `duration: 2` |
 | `scroll` | Scroll at position | `coordinate`, `scroll_direction`, `scroll_amount` |
+| `zoom` | Inspect a screen region at full resolution | `region: [x1, y1, x2, y2]` |
 | `wait` | Pause for N seconds (max 10) | `duration: 2` |
 
 ## Usage Examples
@@ -113,7 +142,7 @@ The terminal running Hermes has focus. After using `osascript` or `open` via the
 
 When running via Telegram/Discord gateway, the agent runs in the background with no terminal window. Focus issues don't occur, making this the most reliable mode for desktop automation.
 
-Screenshots are sent as images to the chat. Each screenshot generates a unique file path (e.g., `MEDIA:/tmp/hermes_screenshot_a1b2c3d4.jpg`). The agent extracts this path from the tool result's `text_summary` and includes it in the response, and the gateway delivers it as a native image.
+Screenshots are sent as images to the chat. Each screenshot generates a unique file path (e.g., `MEDIA:/tmp/hermes_screenshot_a1b2c3d4.png`). The agent extracts this path from the tool result's `text_summary` and includes it in the response, and the gateway delivers it as a native image.
 
 ## Skills
 
