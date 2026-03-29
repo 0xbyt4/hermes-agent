@@ -94,6 +94,7 @@ _COMMON_BETAS = [
     "interleaved-thinking-2025-05-14",
     "fine-grained-tool-streaming-2025-05-14",
     "computer-use-2025-11-24",
+    "context-management-2025-06-27",
 ]
 
 # Additional beta headers required for OAuth/subscription auth.
@@ -1216,6 +1217,7 @@ def build_anthropic_kwargs(
     preserve_dots: bool = False,
     context_length: Optional[int] = None,
     native_tools: Optional[List[Dict]] = None,
+    context_management: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build kwargs for anthropic.messages.create().
 
@@ -1229,6 +1231,10 @@ def build_anthropic_kwargs(
 
     When *preserve_dots* is True, model name dots are not converted to hyphens
     (for Alibaba/DashScope anthropic-compatible endpoints: qwen3.5-plus).
+
+    When *context_management* is provided, enables server-side context editing
+    (e.g. clearing old tool results). Only used with computer_use to reduce
+    token costs from accumulated screenshots.
     """
     system, anthropic_messages = convert_messages_to_anthropic(messages)
     anthropic_tools = convert_tools_to_anthropic(tools) if tools else []
@@ -1240,6 +1246,13 @@ def build_anthropic_kwargs(
     # (e.g. custom endpoint with limited capacity).
     if context_length and effective_max_tokens > context_length:
         effective_max_tokens = max(context_length - 1, 1)
+
+    # Append native Anthropic tool types (e.g. computer_use) that bypass
+    # the OpenAI-to-Anthropic conversion — they use Anthropic's own format.
+    # Must happen BEFORE OAuth prefixing so native tools also get the mcp_
+    # prefix, keeping tool definitions consistent with message history.
+    if native_tools:
+        anthropic_tools.extend(native_tools)
 
     # ── OAuth: Claude Code identity ──────────────────────────────────
     if is_oauth:
@@ -1264,19 +1277,25 @@ def build_anthropic_kwargs(
                 block["text"] = text
 
         # 3. Prefix tool names with mcp_ (Claude Code convention)
+        #    Skip native Anthropic tool types (e.g. computer_20251124) —
+        #    their names are fixed by the API and must not be prefixed.
+        _NATIVE_TOOL_TYPES = {"computer_20251124", "text_editor_20250124", "bash_20250124"}
         if anthropic_tools:
             for tool in anthropic_tools:
-                if "name" in tool:
+                if "name" in tool and tool.get("type") not in _NATIVE_TOOL_TYPES:
                     tool["name"] = _MCP_TOOL_PREFIX + tool["name"]
 
         # 4. Prefix tool names in message history (tool_use and tool_result blocks)
+        #    Skip native tool names (e.g. "computer") — same reason as step 3.
+        _native_tool_names = {t["name"] for t in (native_tools or []) if "name" in t}
         for msg in anthropic_messages:
             content = msg.get("content")
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict):
                         if block.get("type") == "tool_use" and "name" in block:
-                            if not block["name"].startswith(_MCP_TOOL_PREFIX):
+                            if (not block["name"].startswith(_MCP_TOOL_PREFIX)
+                                    and block["name"] not in _native_tool_names):
                                 block["name"] = _MCP_TOOL_PREFIX + block["name"]
                         elif block.get("type") == "tool_result" and "tool_use_id" in block:
                             pass  # tool_result uses ID, not name
@@ -1290,10 +1309,11 @@ def build_anthropic_kwargs(
     if system:
         kwargs["system"] = system
 
-    # Append native Anthropic tool types (e.g. computer_use) that bypass
-    # the OpenAI-to-Anthropic conversion — they use Anthropic's own format.
-    if native_tools:
-        anthropic_tools.extend(native_tools)
+    # Server-side context editing (beta) — clears old tool results to
+    # reduce token costs. Currently only enabled for computer_use sessions
+    # where accumulated screenshots bloat context rapidly.
+    if context_management:
+        kwargs["context_management"] = context_management
 
     if anthropic_tools:
         kwargs["tools"] = anthropic_tools

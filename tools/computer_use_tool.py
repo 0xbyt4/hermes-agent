@@ -461,8 +461,14 @@ def _execute_action(action: str, args: Dict[str, Any],
         return "middle-clicked at current position"
 
     if action == "left_click_drag":
-        start = args.get("start_coordinate", coordinate)
+        # Anthropic spec: start_coordinate = drag start, coordinate = drag end.
+        # Also accept end_coordinate as an alias for the endpoint.
+        # Fallback: if only coordinate is given, use current cursor position as start.
+        start = args.get("start_coordinate")
         end = args.get("end_coordinate") or args.get("coordinate") or coordinate
+        if not start and end:
+            # No explicit start — use current cursor position as drag origin
+            start = list(pyautogui.position())
         if not start or not end:
             return "error: start_coordinate and end_coordinate required for drag"
         if start == end:
@@ -470,8 +476,16 @@ def _execute_action(action: str, args: Dict[str, Any],
         sx, sy = int(start[0]), int(start[1])
         ex, ey = int(end[0]), int(end[1])
         _quartz_drag(sx, sy, ex, ey)
+        # Report both positions in image space (what Claude sees) for consistency.
+        # sx,sy are in screen space (already scaled up by handle_computer_use),
+        # so convert back to image space for the status message.
+        if image_w and actual_w and image_w != actual_w:
+            isx = int(sx * image_w / actual_w)
+            isy = int(sy * image_h / actual_h)
+        else:
+            isx, isy = sx, sy
         ix, iy = _pos_in_image_space()
-        return f"dragged from ({sx}, {sy}) to ({ix}, {iy})"
+        return f"dragged from ({isx}, {isy}) to ({ix}, {iy})"
 
     if action == "type":
         if not text:
@@ -716,30 +730,33 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             b64_data, img_w, img_h, img_media = _take_screenshot()
             # Crop the region using sips (save full screenshot, crop, re-encode)
             import uuid as _uuid
-            tmp_full = f"/tmp/hermes_zoom_full_{_uuid.uuid4().hex[:8]}.jpg"
-            tmp_crop = f"/tmp/hermes_zoom_crop_{_uuid.uuid4().hex[:8]}.jpg"
+            tmp_full = f"/tmp/hermes_zoom_full_{_uuid.uuid4().hex[:8]}.png"
+            tmp_crop = f"/tmp/hermes_zoom_crop_{_uuid.uuid4().hex[:8]}.png"
             with open(tmp_full, "wb") as f:
                 f.write(base64.b64decode(b64_data))
             x1, y1, x2, y2 = int(region[0]), int(region[1]), int(region[2]), int(region[3])
             crop_w, crop_h = x2 - x1, y2 - y1
+            # Keep PNG — zoom is for detailed inspection of small text/icons.
+            # Token cost is pixel-based (same as JPEG), but PNG preserves
+            # text sharpness that Claude needs for accurate reading.
             subprocess.run(
                 ["sips", "--cropOffset", str(y1), str(x1),
                  "--cropToHeightWidth", str(crop_h), str(crop_w),
-                 "-s", "format", "jpeg", "-s", "formatOptions", "90",
                  tmp_full, "--out", tmp_crop],
                 capture_output=True, timeout=10,
             )
             with open(tmp_crop, "rb") as f:
-                crop_b64 = base64.b64encode(f.read()).decode("ascii")
-            # Cleanup
+                crop_bytes = f.read()
+            crop_b64 = base64.b64encode(crop_bytes).decode("ascii")
+            # Cleanup temp files
             for p in (tmp_full, tmp_crop):
                 try:
                     os.unlink(p)
                 except OSError:
                     pass
-            screenshot_path = f"/tmp/hermes_zoom_{_uuid.uuid4().hex[:8]}.jpg"
+            screenshot_path = f"/tmp/hermes_zoom_{_uuid.uuid4().hex[:8]}.png"
             with open(screenshot_path, "wb") as f:
-                f.write(base64.b64decode(crop_b64))
+                f.write(crop_bytes)
             _zoom_summary = f"Zoomed region ({x1},{y1})-({x2},{y2}) = {crop_w}x{crop_h}px MEDIA:{screenshot_path}"
             # Debug: log zoom result
             try:
@@ -755,7 +772,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "image/jpeg",
+                            "media_type": "image/png",
                             "data": crop_b64,
                         },
                     },

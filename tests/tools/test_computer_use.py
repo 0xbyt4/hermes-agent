@@ -272,17 +272,25 @@ class TestDragCoordinates:
         from tools.computer_use_tool import handle_computer_use
         mock_pag = MagicMock()
         mock_pag.FAILSAFE = True
+        mock_pag.position.return_value = MagicMock(x=400, y=500)
         with patch.dict("sys.modules", {"pyautogui": mock_pag}):
             with patch("tools.computer_use_tool._quartz_drag") as mock_drag:
-                result = handle_computer_use({
-                    "action": "left_click_drag",
-                    "coordinate": [100, 200],
-                    "start_coordinate": [100, 200],
-                    "end_coordinate": [400, 500],
-                })
-                parsed = json.loads(result)
-                assert parsed.get("success") is True
-                mock_drag.assert_called_once_with(100, 200, 400, 500)
+                # Auto-screenshot fires after drag — mock it to avoid real capture
+                with patch("tools.computer_use_tool._take_screenshot",
+                           return_value=("AAAA", 1024, 768, "image/png")):
+                    result = handle_computer_use({
+                        "action": "left_click_drag",
+                        "coordinate": [100, 200],
+                        "start_coordinate": [100, 200],
+                        "end_coordinate": [400, 500],
+                    })
+                    # Auto-screenshot makes result multimodal (dict), not JSON string
+                    if isinstance(result, dict) and result.get("_multimodal"):
+                        assert "dragged" in result.get("text_summary", "")
+                    else:
+                        parsed = json.loads(result)
+                        assert parsed.get("success") is True
+                    mock_drag.assert_called_once_with(100, 200, 400, 500)
 
 
 class TestScrollDirection:
