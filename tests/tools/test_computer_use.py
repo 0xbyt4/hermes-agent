@@ -218,14 +218,21 @@ class TestActionResults:
 
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     @patch("tools.computer_use_tool._cached_screenshot_size", (1024, 768))
-    def test_click_returns_json_not_multimodal(self, _size):
-        """Non-screenshot actions return JSON string, not multimodal dict."""
+    def test_click_returns_result(self, _size):
+        """Click actions return a result (multimodal with auto-screenshot)."""
         from tools.computer_use_tool import handle_computer_use
-        with patch.dict("sys.modules", {"pyautogui": MagicMock()}):
-            result = handle_computer_use({"action": "left_click", "coordinate": [500, 300]})
-            assert isinstance(result, str)
-            parsed = json.loads(result)
-            assert parsed.get("success") is True
+        mock_pag = MagicMock()
+        mock_pag.FAILSAFE = True
+        mock_pag.position.return_value = MagicMock(x=500, y=300)
+        with patch.dict("sys.modules", {"pyautogui": mock_pag}):
+            with patch("tools.computer_use_tool._take_screenshot",
+                       return_value=("AAAA", 1024, 768, "image/png")):
+                result = handle_computer_use({"action": "left_click", "coordinate": [500, 300]})
+                if isinstance(result, dict) and result.get("_multimodal"):
+                    assert "clicked" in result.get("text_summary", "")
+                else:
+                    parsed = json.loads(result)
+                    assert parsed.get("success") is True
 
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     @patch("tools.computer_use_tool._cached_screenshot_size", (1024, 768))
@@ -236,8 +243,11 @@ class TestActionResults:
         mock_pag.FAILSAFE = True
         with patch.dict("sys.modules", {"pyautogui": mock_pag}):
             result = handle_computer_use({"action": "type", "text": ""})
-            parsed = json.loads(result)
-            assert "error" in parsed.get("status", "")
+            if isinstance(result, dict) and result.get("_multimodal"):
+                assert "error" in result.get("text_summary", "")
+            else:
+                parsed = json.loads(result)
+                assert "error" in parsed.get("status", "")
 
     @patch("tools.computer_use_tool._cleanup_temp_files")
     @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
@@ -449,16 +459,22 @@ class TestModifierKeys:
         from tools.computer_use_tool import handle_computer_use
         mock_pag = MagicMock()
         mock_pag.FAILSAFE = True
+        mock_pag.position.return_value = MagicMock(x=500, y=300)
         with patch.dict("sys.modules", {"pyautogui": mock_pag}):
-            result = handle_computer_use({
-                "action": "left_click",
-                "coordinate": [500, 300],
-                "text": "shift",
-            })
-            parsed = json.loads(result)
-            assert parsed.get("success") is True
-            mock_pag.keyDown.assert_called_once_with("shift")
-            mock_pag.keyUp.assert_called_once_with("shift")
+            with patch("tools.computer_use_tool._take_screenshot",
+                       return_value=("AAAA", 1024, 768, "image/png")):
+                result = handle_computer_use({
+                    "action": "left_click",
+                    "coordinate": [500, 300],
+                    "text": "shift",
+                })
+                if isinstance(result, dict) and result.get("_multimodal"):
+                    assert "clicked" in result.get("text_summary", "")
+                else:
+                    parsed = json.loads(result)
+                    assert parsed.get("success") is True
+                mock_pag.keyDown.assert_called_once_with("shift")
+                mock_pag.keyUp.assert_called_once_with("shift")
 
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     @patch("tools.computer_use_tool._cached_screenshot_size", (1024, 768))
