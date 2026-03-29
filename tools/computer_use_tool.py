@@ -92,14 +92,23 @@ _BLOCKED_KEY_COMBOS = {
 # ambiguous patterns (passwords, credit cards) are left to the model.
 import re as _re
 _BLOCKED_TYPE_PATTERNS = [
+    # Remote code execution
     _re.compile(r"curl\s+.+\|\s*(ba)?sh", _re.IGNORECASE),      # curl ... | bash
     _re.compile(r"wget\s+.+\|\s*(ba)?sh", _re.IGNORECASE),      # wget ... | bash
     _re.compile(r"curl\s+.+\|\s*python", _re.IGNORECASE),       # curl ... | python
+    # Destructive commands
     _re.compile(r"sudo\s+rm\s+.*-[rR]", _re.IGNORECASE),        # sudo rm -rf
     _re.compile(r"mkfs\.", _re.IGNORECASE),                       # mkfs.ext4 (format disk)
     _re.compile(r"dd\s+if=.+of=/dev/", _re.IGNORECASE),          # dd write to device
     _re.compile(r"chmod\s+777\s+/", _re.IGNORECASE),             # chmod 777 / (open everything)
     _re.compile(r">\s*/etc/", _re.IGNORECASE),                    # overwrite system files
+    # Privilege escalation — agent should never gain root via GUI typing
+    _re.compile(r"sudo\s+(-\w+\s+)*su(\s|$)", _re.IGNORECASE),  # sudo su
+    _re.compile(r"sudo\s+(-\w+\s+)*-s(\s|$)", _re.IGNORECASE),  # sudo -s (root shell)
+    _re.compile(r"sudo\s+(-\w+\s+)*(ba)?sh(\s|$)", _re.IGNORECASE),  # sudo bash/sh
+    _re.compile(r"sudo\s+(-\w+\s+)*passwd", _re.IGNORECASE),    # sudo passwd (change passwords)
+    _re.compile(r"sudo\s+(-\w+\s+)*visudo", _re.IGNORECASE),    # sudo visudo (edit sudoers)
+    _re.compile(r"sudo\s+(-\w+\s+)*chown\s+.*root", _re.IGNORECASE),  # sudo chown root
 ]
 
 # pyautogui key name normalization.

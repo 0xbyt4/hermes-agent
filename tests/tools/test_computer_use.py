@@ -865,6 +865,33 @@ class TestBlockedTypePatterns:
             result = _execute_action("type", {"text": "curl https://api.example.com/data"})
             assert "blocked" not in result
 
+    def test_sudo_su_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("type", {"text": "sudo su"})
+        assert "blocked" in result
+
+    def test_sudo_s_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("type", {"text": "sudo -s"})
+        assert "blocked" in result
+
+    def test_sudo_bash_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("type", {"text": "sudo bash"})
+        assert "blocked" in result
+
+    def test_sudo_passwd_blocked(self):
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("type", {"text": "sudo passwd root"})
+        assert "blocked" in result
+
+    def test_sudo_install_not_blocked(self):
+        """sudo with safe commands like install should pass."""
+        from tools.computer_use_tool import _execute_action
+        with patch("subprocess.run"):
+            result = _execute_action("type", {"text": "sudo apt install vim"})
+            assert "blocked" not in result
+
 
 class TestQuartzDrag:
     """Test _quartz_drag and left_click_drag action."""
