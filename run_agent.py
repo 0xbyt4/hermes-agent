@@ -7197,6 +7197,32 @@ class AIAgent:
         except Exception:
             return None
 
+    def _get_context_management(self) -> Optional[dict]:
+        """Build context_management config for server-side context editing.
+
+        Only enabled when computer_use is active — screenshots accumulate
+        ~1,500 tokens each and old ones are rarely useful. Server-side
+        clearing keeps the 3 most recent tool results and replaces older
+        ones with placeholders, significantly reducing token costs in
+        long computer use sessions.
+
+        Returns None for all non-computer-use sessions (zero impact).
+        """
+        if "computer" not in self.valid_tool_names:
+            return None
+        return {
+            "edits": [
+                {
+                    "type": "clear_tool_uses_20250919",
+                    "trigger": {"type": "input_tokens", "value": 30000},
+                    "keep": {"type": "tool_uses", "value": 3},
+                    # Don't clear tiny amounts — each clear invalidates
+                    # prompt cache, so only clear when it's worth it.
+                    "clear_at_least": {"type": "input_tokens", "value": 5000},
+                },
+            ],
+        }
+
     def _build_api_kwargs(self, api_messages: list) -> dict:
         """Build the keyword arguments dict for the active API mode."""
         if self.api_mode == "anthropic_messages":
@@ -7233,6 +7259,7 @@ class AIAgent:
                 base_url=getattr(self, "_anthropic_base_url", None),
                 fast_mode=(self.request_overrides or {}).get("speed") == "fast",
                 native_tools=native_tools,
+                context_management=self._get_context_management(),
             )
 
         # AWS Bedrock native Converse API — bypasses the OpenAI client entirely.
@@ -11282,6 +11309,17 @@ class AIAgent:
                     assistant_message, finish_reason = normalize_anthropic_response(
                         response, strip_tool_prefix=self._is_anthropic_oauth
                     )
+                    # Log server-side context editing results (computer_use optimization)
+                    _ctx_mgmt = getattr(response, "context_management", None)
+                    if _ctx_mgmt:
+                        for _edit in getattr(_ctx_mgmt, "applied_edits", []) or []:
+                            _cleared = getattr(_edit, "cleared_tool_uses", 0)
+                            _cleared_tokens = getattr(_edit, "cleared_input_tokens", 0)
+                            if _cleared:
+                                logger.info(
+                                    "Context editing: cleared %d tool result(s), ~%d input tokens saved",
+                                    _cleared, _cleared_tokens,
+                                )
                 else:
                     assistant_message = response.choices[0].message
                 
