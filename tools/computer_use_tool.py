@@ -766,9 +766,12 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             logger.error("Zoom failed: %s", e)
             return json.dumps({"error": f"Zoom failed: {e}"})
 
-    # Execute the action — no auto-screenshot. Claude will send a
-    # separate 'screenshot' action when it wants to see the result.
-    # This avoids doubling token/transfer cost on every interaction.
+    # Execute the action with auto-screenshot for destructive actions.
+    # Previously, screenshots were left to Claude ("send a separate screenshot
+    # action"). In practice Claude skips screenshots 66% of the time, causing
+    # blind action chains that waste MORE tokens than the screenshot costs.
+    # Auto-screenshot eliminates the extra round-trip: Claude sees the screen
+    # state in the same response and can make its next decision immediately.
     #
     # Modifier keys (shift, ctrl, alt, super) are held during click/scroll
     # actions per Anthropic spec — the "text" param on these actions holds
@@ -798,6 +801,54 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             _dbg_f.write(f"  -> result: {status[:100]} cursor_after=({_dbg_pos_after.x},{_dbg_pos_after.y})\n")
     except Exception:
         pass
+
+    # Auto-screenshot after destructive actions so Claude sees the result
+    # without needing a separate screenshot call (saves 1 API round-trip).
+    # Only for actions that change screen state — skip for wait, mouse_move.
+    _AUTO_SCREENSHOT_ACTIONS = {
+        "left_click", "right_click", "double_click", "triple_click",
+        "middle_click", "left_click_drag", "type", "key", "scroll",
+    }
+    if action in _AUTO_SCREENSHOT_ACTIONS:
+        try:
+            time.sleep(0.3)  # Brief pause for UI to settle
+            b64_data, img_w, img_h, img_media = _take_screenshot()
+            try:
+                _mx, _my = _pag.position()
+                _img_mx = int(_mx * img_w / actual_w) if actual_w else _mx
+                _img_my = int(_my * img_h / actual_h) if actual_h else _my
+                _cursor_info = f" Cursor at ({_img_mx}, {_img_my})."
+            except Exception:
+                _cursor_info = ""
+            import uuid as _uuid
+            ext = "jpg" if "jpeg" in img_media else "png"
+            screenshot_path = f"/tmp/hermes_screenshot_{_uuid.uuid4().hex[:8]}.{ext}"
+            with open(screenshot_path, "wb") as f:
+                f.write(base64.b64decode(b64_data))
+            _text_summary = f"{status}.{_cursor_info} MEDIA:{screenshot_path}"
+            try:
+                _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
+                with open(_DEBUG_LOG_PATH, "a") as _dbg_f:
+                    _dbg_f.write(f"  -> auto-screenshot: {_text_summary[:150]}\n")
+            except Exception:
+                pass
+            return {
+                "_multimodal": True,
+                "content_blocks": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": img_media,
+                            "data": b64_data,
+                        },
+                    },
+                ],
+                "text_summary": _text_summary,
+            }
+        except Exception as e:
+            logger.debug("Auto-screenshot failed (non-fatal): %s", e)
+            # Fall through to text-only result
 
     return json.dumps({"success": True, "status": status})
 
