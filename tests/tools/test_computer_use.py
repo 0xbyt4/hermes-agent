@@ -191,18 +191,26 @@ class TestCoordinateParsing:
         from tools.computer_use_tool import handle_computer_use
         with patch.dict("sys.modules", {"pyautogui": MagicMock()}):
             result = handle_computer_use({"action": "left_click", "coordinate": "[500, 300]"})
-            parsed = json.loads(result)
-            assert parsed.get("success") is True
+            # Auto-screenshot returns multimodal dict or JSON string
+            if isinstance(result, dict):
+                assert result.get("_multimodal") is True
+            else:
+                parsed = json.loads(result)
+                assert parsed.get("success") is True
 
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     @patch("tools.computer_use_tool._cached_screenshot_size", (1024, 768))
-    def test_string_list_coordinate_parsed(self, _size):
+    def test_string_list_coordinate_parsed(self, _size, _screenshot):
         """Coordinates as list of strings ['500', '300']."""
         from tools.computer_use_tool import handle_computer_use
         with patch.dict("sys.modules", {"pyautogui": MagicMock()}):
             result = handle_computer_use({"action": "left_click", "coordinate": ["500", "300"]})
-            parsed = json.loads(result)
-            assert parsed.get("success") is True
+            if isinstance(result, dict):
+                assert result.get("_multimodal") is True
+            else:
+                parsed = json.loads(result)
+                assert parsed.get("success") is True
 
 
 class TestActionResults:
