@@ -86,6 +86,22 @@ _BLOCKED_KEY_COMBOS = {
     frozenset({"command", "option", "shift", "q"}),     # Force log out — no save prompt
 }
 
+# Dangerous text patterns for the `type` action. These are blocked at code
+# level because prompt-level guardrails can be bypassed via injection.
+# Only patterns with high confidence of malicious intent are blocked;
+# ambiguous patterns (passwords, credit cards) are left to the model.
+import re as _re
+_BLOCKED_TYPE_PATTERNS = [
+    _re.compile(r"curl\s+.+\|\s*(ba)?sh", _re.IGNORECASE),      # curl ... | bash
+    _re.compile(r"wget\s+.+\|\s*(ba)?sh", _re.IGNORECASE),      # wget ... | bash
+    _re.compile(r"curl\s+.+\|\s*python", _re.IGNORECASE),       # curl ... | python
+    _re.compile(r"sudo\s+rm\s+.*-[rR]", _re.IGNORECASE),        # sudo rm -rf
+    _re.compile(r"mkfs\.", _re.IGNORECASE),                       # mkfs.ext4 (format disk)
+    _re.compile(r"dd\s+if=.+of=/dev/", _re.IGNORECASE),          # dd write to device
+    _re.compile(r"chmod\s+777\s+/", _re.IGNORECASE),             # chmod 777 / (open everything)
+    _re.compile(r">\s*/etc/", _re.IGNORECASE),                    # overwrite system files
+]
+
 # pyautogui key name normalization.
 # Claude sends "cmd" but pyautogui requires "command" (keycode 55).
 # Without this mapping, pyautogui.hotkey("cmd", "n") silently drops
@@ -451,6 +467,11 @@ def _execute_action(action: str, args: Dict[str, Any],
     if action == "type":
         if not text:
             return "error: text required for type action"
+        # Block dangerous shell commands that could be injected via prompt injection
+        for pattern in _BLOCKED_TYPE_PATTERNS:
+            if pattern.search(text):
+                logger.warning("Blocked dangerous type content: %s", text[:100])
+                return f"error: blocked — text contains dangerous command pattern"
         # Always use clipboard paste — pyautogui.write() depends on the active
         # keyboard layout (e.g. Turkish layout maps '.' differently) and only
         # supports ASCII. Clipboard paste works with any layout and any charset.
