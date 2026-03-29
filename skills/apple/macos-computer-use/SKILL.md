@@ -375,26 +375,37 @@ Use cases:
 - Move windows: drag from title bar
 - Resize windows: drag from window edges
 
-### Multi-file drag (rubber band selection):
-To move multiple files at once, use a two-step drag approach:
+### Multi-file drag:
 
+Two methods to select multiple files, both require dragging from a selected
+file's icon center afterward:
+
+**Method 1 — Rubber band (contiguous files):**
 ```
 1. screenshot — see files on screen
-2. Rubber band select: left_click_drag from EMPTY SPACE at one corner to
-   opposite corner, enclosing all target files
-   (start_coordinate must be on empty background, not on any file icon)
-3. screenshot — verify files are selected (highlighted)
-4. zoom on one of the selected file icons — find exact center
-5. left_click_drag from selected file icon center to destination folder
-   (dragging any selected file moves ALL selected files)
+2. left_click_drag from EMPTY SPACE to opposite corner — rubber band selects enclosed files
+   (start MUST be on empty background, NOT on any file icon)
+3. screenshot — verify files are highlighted
+4. zoom on one of the selected file icons — find exact icon center
+5. left_click_drag from that icon center to destination folder
 6. screenshot — verify all files moved
 ```
 
-**Important rules for multi-file drag:**
-- Step 2 MUST start from empty space — starting on a file icon will drag that single file instead of creating a selection rectangle
-- Step 5 MUST start from a selected file's icon center — starting from empty space will deselect and create a new selection rectangle
-- Do NOT click between step 2 and step 5 — any click on empty space deselects all files
-- Alternative: use `left_click` then `left_click text=cmd` on each file for non-contiguous selection, then `left_click_drag` from any selected file
+**Method 2 — Cmd+Click (non-contiguous files):**
+```
+1. left_click on first file — selects it
+2. left_click on second file with text=cmd — adds to selection
+3. repeat cmd+click for each additional file
+4. screenshot — verify all files are highlighted
+5. zoom on one of the selected file icons — find exact icon center
+6. left_click_drag from that icon center to destination folder
+7. screenshot — verify all files moved
+```
+
+**Critical rule for BOTH methods:** The final drag (step 5/6) MUST start
+from the exact center of a selected file's icon. Starting from empty space
+deselects everything and creates a new selection rectangle instead of moving
+files. Do NOT click on empty space between selecting and dragging.
 
 ## Reading Screen Content
 
@@ -555,28 +566,20 @@ computer action=zoom, region=[x1, y1, x2, y2]
 ```
 
 ### Rename a file or folder in Finder:
-```
-METHOD 1 — Keyboard (preferred):
-1. Click file to select it
-2. screenshot — verify file is selected (highlighted)
-3. key: Return — activates rename mode
-    *** TEXT INPUT STATE — do NOT click the filename ***
-4. screenshot — verify name is editable (text highlighted in blue)
-5. cmd+a — select all existing text
-6. type: NewFileName
-7. key: Return — confirm rename
-8. screenshot — verify renamed
 
-METHOD 2 — Context menu:
-1. mouse_move to file, verify, right_click — context menu appears
-2. screenshot — find "Rename" in menu
-3. mouse_move to "Rename", verify, left_click
-    *** TEXT INPUT STATE — do NOT click the filename ***
-4. screenshot — verify name field is editable
-5. cmd+a — select all existing text
-6. type: NewFileName
-7. key: Return — confirm rename
-8. screenshot — verify renamed
+**IMPORTANT**: After activating rename mode, `type` (clipboard paste) does NOT work
+until the text field has real keyboard focus. Rename mode visually highlights the
+name but the NSTextField is not first responder yet. You MUST double_click on the
+filename text first to give it real focus, then cmd+a to select all, then type.
+
+```
+1. Click file to select it
+2. key: Return — activates rename mode (or right_click > Rename)
+3. double_click on the filename text — gives text field real keyboard focus
+4. key: command+a — select all text (includes extension if present)
+5. type: NewFileName.ext — replaces selected text (include extension!)
+6. key: Return — confirm rename
+7. screenshot — verify renamed
 ```
 
 ### Open a website:
