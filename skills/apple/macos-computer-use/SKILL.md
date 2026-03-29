@@ -493,11 +493,16 @@ Example response: "Here's your screenshot MEDIA:/tmp/hermes_screenshot_a1b2c3d4.
 
 1. `key: Escape` (2x) — close dialogs, menus, cancel operations
 2. `screenshot` — always check what happened
-3. `command+z` — undo last action
+3. `command+z` — undo ONCE, then screenshot to verify. NEVER chain multiple undos blindly.
 4. `command+w` — close current window/tab
 5. Terminal fallback: `osascript`, `open`, `pbcopy`/`pbpaste` — always available when GUI fails
 6. App not responding: `command+option+Escape` opens Force Quit, or `osascript -e 'tell application "AppName" to quit'`
 7. **Retry limit**: if an action fails 2 times, switch to a different approach (terminal, osascript, different shortcut). Do NOT keep retrying the same thing.
+
+### NEVER do blind actions
+- NEVER perform more than 2 actions without taking a screenshot
+- Every action can fail silently — you MUST see the result before continuing
+- Keyboard shortcuts are especially risky without verification — they go to whatever app is focused, not necessarily the one you expect
 
 ## Accessibility Permissions
 
