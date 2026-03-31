@@ -596,6 +596,13 @@ def execute_code(
         stdout_text = strip_ansi(stdout_text)
         stderr_text = strip_ansi(stderr_text)
 
+        # Redact secrets from script output — same as terminal_tool.
+        # Without this, execute_code can exfiltrate .env secrets via
+        # `import os; print(os.environ)` bypassing terminal redaction.
+        from agent.redact import redact_sensitive_text
+        stdout_text = redact_sensitive_text(stdout_text)
+        stderr_text = redact_sensitive_text(stderr_text)
+
         # Build response
         result: Dict[str, Any] = {
             "status": status,
