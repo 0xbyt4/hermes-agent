@@ -72,20 +72,24 @@ Control a macOS desktop via the `computer` tool — screenshots, mouse, keyboard
 
 The cursor is your primary tool for interacting with any visible UI element — buttons, menus, dropdowns, sidebar items, dialog controls, icons, tabs, and links. If you can see it on screen, you can click it.
 
-### Hover-Verify-Click Pattern (ALWAYS use this):
-```
-1. screenshot — see the screen, note where cursor is
-2. mouse_move to target — move cursor to the element you want to click
-3. screenshot — VERIFY cursor is on the correct element
-4. left_click (no coordinate) — click at current cursor position
-5. screenshot — verify the click had the expected effect
-```
+### Two click methods:
 
-### Why this works:
-- `mouse_move` is accurate — cursor goes exactly where you say
-- Screenshot shows cursor visually — you can SEE if it's on the right element
-- `left_click` without coordinates clicks at current position — no guessing
-- If cursor is wrong, adjust with another `mouse_move` before clicking
+**Direct click (default for most targets):**
+```
+1. left_click coordinate=[x, y] — click the target directly
+   (auto-screenshot is taken after every click — check the result)
+```
+Coordinate accuracy is ~0-1px after scaling. Direct click works reliably for
+buttons, menu items, links, tabs, sidebar items, and any target larger than ~20px.
+
+**Hover-verify-click (for small/precise targets only):**
+```
+1. mouse_move to target
+2. screenshot — verify cursor is on the correct element
+3. left_click (no coordinate) — click at current cursor position
+```
+Use this for: traffic light buttons (~12px), small toolbar icons, closely
+spaced controls. NOT needed for normal buttons, menu items, or links.
 
 ### All available actions:
 
@@ -134,33 +138,29 @@ Key names are auto-normalized — all of these are valid and equivalent:
 ### Coordinate reference:
 - **Dock icons**: y > 820 (on 1300x845 screenshot)
 - **Menu bar**: y = 0 to 22
+- **Traffic light buttons** (window title bar, ~12px apart):
+  Red (close) x≈20, Yellow (minimize) x≈45, Green (fullscreen) x≈68, y≈47
+  (y assumes window docked at top — read from screenshot for floating windows)
 - **Aim for center** of buttons/icons — never edges
 
 ### DO NOT:
-- Do NOT guess coordinates and click directly — always hover-verify first
 - Do NOT retry the same coordinate after a miss — take screenshot and adjust
-- Do NOT combine mouse_move + click in one step — always verify between them
+- Do NOT perform more than 2 actions without taking a screenshot to check results
 
 ### Context menus (right-click):
 ```
-1. mouse_move to target element
-2. screenshot — verify position
-3. right_click — opens context menu
-4. screenshot — see menu options
-5. mouse_move to menu item
-6. screenshot — verify on correct item
-7. left_click — select menu item
-8. screenshot — verify action result (see Text Input State below)
+1. right_click coordinate=[x, y] — opens context menu
+2. screenshot — see menu options
+3. left_click on menu item — select it
+4. screenshot — verify action result (see Text Input State below)
 ```
 
 ### Navigating dialogs and UI with cursor:
-Save dialogs, settings windows, preference panels — use cursor to interact:
-- **Sidebar items**: mouse_move to item in sidebar, verify, click
-- **Dropdown menus**: mouse_move to dropdown, verify, click to open, then click option
-- **Buttons** (Save, Cancel, OK): mouse_move to button center, verify, click
-- **Tabs**: mouse_move to tab label, verify, click
+Save dialogs, settings windows, preference panels — click directly:
+- **Sidebar items, tabs, buttons** (Save, Cancel, OK): `left_click` at center
+- **Dropdown menus**: click to open, then click option
 - **Disclosure triangles** (▼): small arrows that expand/collapse sections — click to toggle
-- **Checkboxes/radio buttons**: mouse_move to the control, verify, click
+- **Checkboxes/radio buttons**: click the control directly
 
 ### Text Input State (CRITICAL)
 
@@ -194,7 +194,20 @@ Some actions activate a **text input field** where the next step is typing, NOT 
 
 ## Keyboard Shortcuts
 
-Useful for text editing and app switching. For GUI interactions (buttons, menus, dropdowns, sidebar items, dialogs), prefer using the cursor with hover-verify-click — it works on any UI element you can see.
+Useful for text editing and app switching. For GUI interactions (buttons, menus, dropdowns, sidebar items, dialogs), prefer using the cursor — direct click works on any UI element you can see.
+
+### CRITICAL — Focus before text-sending shortcuts (cmd+l, cmd+t, cmd+f):
+Always click inside the TARGET APP WINDOW before pressing shortcuts that open
+text fields. If another app (e.g. Discord, Slack) is focused, the shortcut does
+nothing — and your subsequent `type` sends text into that app instead, potentially
+posting it publicly. Pattern:
+1. `left_click` on a neutral area of the target app window
+2. `screenshot` — verify correct app is frontmost (check menu bar app name)
+3. THEN press the shortcut
+
+### Minimize pitfall:
+`command+m` minimizes whichever window is currently frontmost — not necessarily
+the one you intend. Always click the target window first, then `command+m`.
 
 ### Pre-shortcut Checklist (MUST follow)
 
@@ -515,17 +528,28 @@ The computer tool requires macOS permissions:
 
 ## Zoom Action
 
-Use `zoom` to inspect a small area at full resolution. Useful for reading small text, verifying icons, or checking UI details.
+Use `zoom` to inspect a small area at full resolution. **Use sparingly** — most
+tasks do not require zoom. Every zoom costs a round-trip (~3-4s) and tokens.
 
 ```
 computer action=zoom, region=[x1, y1, x2, y2]
 ```
 
+**When to zoom:**
+- Finding exact icon center for **drag operations** (file drag requires pixel-accurate start)
+- Reading **small text** that is illegible in the 1300x845 screenshot
+- Inspecting **closely-spaced small controls** (e.g. traffic light buttons)
+
+**When NOT to zoom:**
+- Before a normal click — coordinate accuracy is 0-1px, just click directly
+- To "verify" what you already see in the screenshot — the screenshot is enough
+- Before every action — zoom is NOT a verification step, screenshots are
+
 **Rules:**
 - Region coordinates are in screenshot space (not screen space)
 - Minimum region size: 30x30 pixels (smaller regions are rejected)
 - Aim for regions of 100x100 to 400x300 for best results
-- Do NOT use tiny strips (e.g. 1300x25) — they produce unusable images
+- Do NOT use tiny strips (e.g. 1300x25 or 265x25) — minimum ~60px height for text
 - If you need to read text, capture a region that includes full line height plus padding
 
 ## Limitations
@@ -542,32 +566,39 @@ computer action=zoom, region=[x1, y1, x2, y2]
 
 ## Workflow Examples
 
-### Click a specific UI element (hover-verify-click):
+### Click a specific UI element:
 ```
-1. screenshot — see screen, note cursor position
-2. mouse_move to [x, y] — move cursor to target button/icon
-3. screenshot — VERIFY cursor is on the correct element
-4. left_click — click at current position (no coordinates!)
-5. screenshot — verify click had expected effect
+1. screenshot — see screen
+2. left_click coordinate=[x, y] — click the target directly
+3. (auto-screenshot verifies the result)
 ```
+For small targets (<20px), use hover-verify: mouse_move → screenshot → left_click (no coordinate).
 
 ### Create a new folder in Finder (GUI):
 ```
 1. osascript -e 'tell application "Finder" to activate'
 2. wait 0.5s
 3. screenshot — verify Finder is frontmost
-4. mouse_move to empty area in Finder window
-5. screenshot — verify cursor in window
-6. right_click — open context menu
-7. screenshot — see menu
-8. mouse_move to "New Folder" menu item
-9. screenshot — verify on correct item
-10. left_click — creates folder with editable name field active
+4. right_click on empty area in Finder window
+5. screenshot — see context menu
+6. left_click "New Folder"
     *** TEXT INPUT STATE — do NOT click again ***
-11. screenshot — verify name field is editable (text highlighted)
-12. type: MyNewFolder — (do NOT click the name field first!)
-13. key: Return — confirm name
-14. screenshot — verify folder created with correct name
+7. screenshot — verify name field is editable (text highlighted)
+8. type: MyNewFolder — (do NOT click the name field first!)
+9. key: Return — confirm name
+10. screenshot — verify folder created with correct name
+```
+
+### Create a new folder on Desktop:
+Desktop behaves differently from Finder windows — `type` requires extra focus step.
+```
+1. right_click on empty desktop CENTER (not near right edge — triggers widgets panel)
+2. left_click "New Folder" — "untitled folder" appears with name highlighted
+3. double_click on the NAME TEXT (not the icon) — gives real keyboard focus
+4. key: command+a — select all (ignore visual artifact of all icons highlighting)
+5. type: MyNewFolder — replaces selected text
+6. key: Return — confirms the name
+7. screenshot — verify folder created
 ```
 
 ### Rename a file or folder in Finder:
@@ -577,15 +608,37 @@ until the text field has real keyboard focus. Rename mode visually highlights th
 name but the NSTextField is not first responder yet. You MUST double_click on the
 filename text first to give it real focus, then cmd+a to select all, then type.
 
+**Method 1 — Right-click > Rename (works everywhere including desktop):**
 ```
-1. Click file to select it
-2. key: Return — activates rename mode (or right_click > Rename)
-3. double_click on the filename text — gives text field real keyboard focus
-4. key: command+a — select all text (includes extension if present)
-5. type: NewFileName.ext — replaces selected text (include extension!)
+1. right_click the file/folder — opens context menu
+2. left_click "Rename" — activates rename mode
+3. double_click on the NAME TEXT (not the icon!) — gives real keyboard focus
+4. key: command+a — select all text
+5. type: NewName — replaces selected text
 6. key: Return — confirm rename
 7. screenshot — verify renamed
 ```
+
+**Method 2 — Return key (Finder windows only, NOT desktop):**
+```
+1. Click file to select it
+2. key: Return — activates rename mode
+3. double_click on the NAME TEXT (not the icon!) — gives real keyboard focus
+4. key: command+a — select all text
+5. type: NewName — replaces selected text
+6. key: Return — confirm rename
+7. screenshot — verify renamed
+```
+
+**Desktop note**: `Return` key OPENS files/folders on the desktop — it does NOT
+enter rename mode. Use Method 1 (right-click > Rename) for desktop items.
+
+**Pitfall — cmd+a visual artifact on desktop**: After cmd+a in rename mode on the
+desktop, ALL desktop icons appear highlighted blue. This is misleading — the text
+field still has the name text selected. Just type immediately after cmd+a.
+
+**Pitfall — widgets panel**: Right-clicking near the right edge of the desktop
+triggers the macOS widgets panel. Right-click in the CENTER of the desktop instead.
 
 ### Open a website:
 ```
@@ -623,16 +676,24 @@ filename text first to give it real focus, then cmd+a to select all, then type.
 
 ### Create and save a text file:
 ```
-1. Terminal: open -a TextEdit
-2. wait 1s
-3. screenshot — verify TextEdit open
-4. type: Hello World
-5. key: command+s — save dialog
-6. wait 0.5s
+1. key: command+space — open Spotlight
+2. type: TextEdit
+3. key: Return — opens TextEdit
+4. screenshot — verify TextEdit open
+5. type: Hello World
+6. key: command+s — save dialog
 7. screenshot — verify dialog
-8. type: myfile.txt
-9. key: Return
+8. key: command+a — select all text in filename field
+9. type: myfile.txt
+10. key: command+shift+d — jump to Desktop (optional)
+11. left_click Save button
+12. screenshot — verify saved
 ```
+
+**Save dialog pitfalls:**
+- Filename field may contain "Untitled" — use cmd+a before typing new name
+- `cmd+shift+d` jumps to Desktop in any save/open dialog
+- If file exists, macOS shows "Replace?" — click Replace to overwrite
 
 ### Drag a single file:
 ```
