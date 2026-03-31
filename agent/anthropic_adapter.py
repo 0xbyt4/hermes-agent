@@ -91,10 +91,10 @@ def _supports_adaptive_thinking(model: str) -> bool:
 
 # Beta headers for enhanced features (sent with ALL auth types)
 _COMMON_BETAS = [
-    "interleaved-thinking-2025-05-14",
-    "fine-grained-tool-streaming-2025-05-14",
     "computer-use-2025-11-24",
     "context-management-2025-06-27",
+    # interleaved-thinking and fine-grained-tool-streaming are GA
+    # in Claude 4.6 — no longer need beta headers.
 ]
 
 # Additional beta headers required for OAuth/subscription auth.

@@ -967,6 +967,14 @@ class AIAgent:
             if not self.quiet_mode:
                 logger.info("computer_use tool removed — requires Anthropic native API (current: %s)", self.api_mode)
 
+        # Enable adaptive thinking for computer_use sessions when no
+        # reasoning config is explicitly set. Anthropic's docs recommend
+        # adaptive thinking for computer use — "best-in-class accuracy".
+        if "computer" in self.valid_tool_names and self.reasoning_config is None:
+            self.reasoning_config = {"effort": "medium"}
+            if not self.quiet_mode:
+                logger.info("computer_use: enabled adaptive thinking (effort=medium)")
+
         # Check tool requirements
         if self.tools and not self.quiet_mode:
             requirements = check_toolset_requirements()
