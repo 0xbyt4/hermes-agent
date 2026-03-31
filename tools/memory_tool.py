@@ -84,6 +84,15 @@ def _scan_memory_content(content: str) -> Optional[str]:
         if re.search(pattern, content, re.IGNORECASE):
             return f"Blocked: content matches threat pattern '{pid}'. Memory entries are injected into the system prompt and must not contain injection or exfiltration payloads."
 
+    # Block raw secrets — memory is persisted to disk and injected into
+    # every future system prompt. A prompt injection that saves a secret
+    # to memory would exfiltrate it across sessions.
+    from agent.redact import _PREFIX_RE, _ENV_ASSIGN_RE
+    if _PREFIX_RE.search(content):
+        return "Blocked: content contains what appears to be an API key or token. Secrets must not be stored in memory."
+    if _ENV_ASSIGN_RE.search(content):
+        return "Blocked: content contains a secret assignment (KEY=value pattern). Secrets must not be stored in memory."
+
     return None
 
 

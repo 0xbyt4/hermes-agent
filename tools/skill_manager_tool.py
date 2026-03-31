@@ -525,6 +525,18 @@ def _remove_file(name: str, file_path: str) -> Dict[str, Any]:
 # Main entry point
 # =============================================================================
 
+def _scan_skill_for_secrets(text: str) -> Optional[str]:
+    """Block raw secrets from being written into skill files."""
+    if not text:
+        return None
+    from agent.redact import _PREFIX_RE, _ENV_ASSIGN_RE
+    if _PREFIX_RE.search(text):
+        return "Blocked: content contains what appears to be an API key or token. Secrets must not be stored in skills."
+    if _ENV_ASSIGN_RE.search(text):
+        return "Blocked: content contains a secret assignment (KEY=value pattern). Secrets must not be stored in skills."
+    return None
+
+
 def skill_manage(
     action: str,
     name: str,
@@ -541,6 +553,13 @@ def skill_manage(
 
     Returns JSON string with results.
     """
+    # Block secrets from being persisted in skill files
+    for text in (content, file_content, new_string):
+        if text:
+            secret_err = _scan_skill_for_secrets(text)
+            if secret_err:
+                return json.dumps({"success": False, "error": secret_err}, ensure_ascii=False)
+
     if action == "create":
         if not content:
             return json.dumps({"success": False, "error": "content is required for 'create'. Provide the full SKILL.md text (frontmatter + body)."}, ensure_ascii=False)

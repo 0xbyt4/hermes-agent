@@ -288,3 +288,41 @@ class TestCodeExecutionRedaction:
         text = "Hello world\nResult: 42\nProcessed 100 items"
         result = redact_sensitive_text(text)
         assert result == text
+
+
+class TestMemoryAndSkillSecretBlocking:
+    """Verify secrets are blocked from being written to memory and skills."""
+
+    def test_memory_blocks_api_key(self):
+        from tools.memory_tool import _scan_memory_content
+        result = _scan_memory_content("Found key: sk-ant-api03-abc123def456ghi789jkl012mno345")
+        assert result is not None
+        assert "API key" in result or "Blocked" in result
+
+    def test_memory_blocks_env_assignment(self):
+        from tools.memory_tool import _scan_memory_content
+        result = _scan_memory_content("OPENAI_API_KEY=sk-proj-abc123def456ghi789")
+        assert result is not None
+        assert "Blocked" in result
+
+    def test_memory_allows_normal_content(self):
+        from tools.memory_tool import _scan_memory_content
+        result = _scan_memory_content("User prefers dark mode and uses TypeScript.")
+        assert result is None
+
+    def test_skill_blocks_api_key(self):
+        from tools.skill_manager_tool import _scan_skill_for_secrets
+        result = _scan_skill_for_secrets("Use this key: sk-ant-api03-abc123def456ghi789jkl012mno345")
+        assert result is not None
+        assert "Blocked" in result
+
+    def test_skill_blocks_env_assignment(self):
+        from tools.skill_manager_tool import _scan_skill_for_secrets
+        result = _scan_skill_for_secrets("ANTHROPIC_TOKEN=sk-ant-oat01-abc123def456ghi789")
+        assert result is not None
+        assert "Blocked" in result
+
+    def test_skill_allows_normal_content(self):
+        from tools.skill_manager_tool import _scan_skill_for_secrets
+        result = _scan_skill_for_secrets("# My Skill\n\nThis skill helps with coding tasks.")
+        assert result is None
