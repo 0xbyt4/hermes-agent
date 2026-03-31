@@ -191,12 +191,24 @@ def _compute_scale(actual_w: int, actual_h: int) -> Tuple[int, int, float]:
     Returns (image_width, image_height, scale_factor) where scale_factor
     is applied to the actual dimensions to produce the image dimensions
     that Claude will see.
+
+    Checks both edge limit (1568px) and pixel limit (~1.15MP) to match
+    the logic in _take_screenshot(). Without the pixel check, the tool
+    definition declares display_width_px=1470 while the actual screenshot
+    is 1300px — a 13% coordinate mismatch on the first turn.
     """
+    import math as _math
     long_edge = max(actual_w, actual_h)
-    if long_edge <= _MAX_SCREENSHOT_EDGE:
+    total_pixels = actual_w * actual_h
+    edge_scale = min(1.0, _MAX_SCREENSHOT_EDGE / long_edge)
+    pixel_scale = min(1.0, _math.sqrt(_MAX_SCREENSHOT_PIXELS / total_pixels))
+    scale = min(edge_scale, pixel_scale)
+    if scale >= 1.0:
         return actual_w, actual_h, 1.0
-    scale = _MAX_SCREENSHOT_EDGE / long_edge
-    return int(actual_w * scale), int(actual_h * scale), scale
+    new_w = int(actual_w * scale)
+    # Derive height from width to match sips --resampleWidth behavior
+    new_h = round(actual_h * new_w / actual_w)
+    return new_w, new_h, scale
 
 
 def scale_coordinates_to_screen(
@@ -207,7 +219,7 @@ def scale_coordinates_to_screen(
     """Scale coordinates from Claude's downsampled image space to actual screen."""
     scale_x = actual_w / image_w if image_w else 1.0
     scale_y = actual_h / image_h if image_h else 1.0
-    return int(claude_x * scale_x), int(claude_y * scale_y)
+    return round(claude_x * scale_x), round(claude_y * scale_y)
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +285,8 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
 
         if scale < 1.0:
             new_w = int(img_w * scale)
-            new_h = int(img_h * scale)
+            # Derive height from width to match sips --resampleWidth behavior
+            new_h = round(img_h * new_w / img_w)
             subprocess.run(
                 ["sips", "--resampleWidth", str(new_w), tmp_path],
                 capture_output=True, timeout=10,
@@ -380,7 +393,7 @@ def _execute_action(action: str, args: Dict[str, Any],
         """Get current cursor position converted to screenshot coordinate space."""
         pos = pyautogui.position()
         if image_w and actual_w and image_w != actual_w:
-            return int(pos.x * image_w / actual_w), int(pos.y * image_h / actual_h)
+            return round(pos.x * image_w / actual_w), round(pos.y * image_h / actual_h)
         return pos.x, pos.y
 
     coordinate = args.get("coordinate")
@@ -480,8 +493,8 @@ def _execute_action(action: str, args: Dict[str, Any],
         # sx,sy are in screen space (already scaled up by handle_computer_use),
         # so convert back to image space for the status message.
         if image_w and actual_w and image_w != actual_w:
-            isx = int(sx * image_w / actual_w)
-            isy = int(sy * image_h / actual_h)
+            isx = round(sx * image_w / actual_w)
+            isy = round(sy * image_h / actual_h)
         else:
             isx, isy = sx, sy
         ix, iy = _pos_in_image_space()
@@ -668,8 +681,8 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
                 import pyautogui as _pag
                 _mx, _my = _pag.position()
                 # Convert from screen space to screenshot/image space
-                _img_mx = int(_mx * img_w / actual_w) if actual_w else _mx
-                _img_my = int(_my * img_h / actual_h) if actual_h else _my
+                _img_mx = round(_mx * img_w / actual_w) if actual_w else _mx
+                _img_my = round(_my * img_h / actual_h) if actual_h else _my
                 _cursor_info = f" Cursor at ({_img_mx}, {_img_my})."
             except Exception:
                 _cursor_info = ""
@@ -727,21 +740,49 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             })
         try:
             _cleanup_temp_files()
-            b64_data, img_w, img_h, img_media = _take_screenshot()
-            # Crop the region using sips (save full screenshot, crop, re-encode)
             import uuid as _uuid
-            tmp_full = f"/tmp/hermes_zoom_full_{_uuid.uuid4().hex[:8]}.png"
-            tmp_crop = f"/tmp/hermes_zoom_crop_{_uuid.uuid4().hex[:8]}.png"
-            with open(tmp_full, "wb") as f:
-                f.write(base64.b64decode(b64_data))
             x1, y1, x2, y2 = int(region[0]), int(region[1]), int(region[2]), int(region[3])
             crop_w, crop_h = x2 - x1, y2 - y1
-            # Keep PNG — zoom is for detailed inspection of small text/icons.
-            # Token cost is pixel-based (same as JPEG), but PNG preserves
-            # text sharpness that Claude needs for accurate reading.
+
+            # Capture at full Retina resolution — zoom needs maximum detail.
+            # Regular screenshots are downscaled to ~1300px for API limits,
+            # but zoom's purpose is inspecting small UI elements (buttons,
+            # text, icons) where every pixel matters.
+            tmp_full = f"/tmp/hermes_zoom_full_{_uuid.uuid4().hex[:8]}.png"
+            tmp_crop = f"/tmp/hermes_zoom_crop_{_uuid.uuid4().hex[:8]}.png"
             subprocess.run(
-                ["sips", "--cropOffset", str(y1), str(x1),
-                 "--cropToHeightWidth", str(crop_h), str(crop_w),
+                ["screencapture", "-x", "-C", "-t", "png", tmp_full],
+                capture_output=True, timeout=10,
+            )
+            # Get Retina dimensions to compute scale factor
+            _sips_info = subprocess.run(
+                ["sips", "-g", "pixelWidth", "-g", "pixelHeight", tmp_full],
+                capture_output=True, text=True, timeout=5,
+            )
+            retina_w = retina_h = 0
+            for _line in _sips_info.stdout.strip().splitlines():
+                if "pixelWidth" in _line:
+                    retina_w = int(_line.split(":")[-1].strip())
+                elif "pixelHeight" in _line:
+                    retina_h = int(_line.split(":")[-1].strip())
+
+            # Scale region coordinates from image space to Retina space.
+            # Claude sends coordinates in image space (~1300x845), but the
+            # Retina screenshot is ~2940x1912 — scale up for accurate crop.
+            _cached = _cached_screenshot_size
+            if isinstance(_cached, tuple) and len(_cached) == 2 and _cached[0] > 0:
+                img_space_w, img_space_h = _cached
+            else:
+                img_space_w, img_space_h = _get_screen_size()
+            sx = retina_w / img_space_w if img_space_w else 1.0
+            sy = retina_h / img_space_h if img_space_h else 1.0
+            rx1, ry1 = round(x1 * sx), round(y1 * sy)
+            rx2, ry2 = round(x2 * sx), round(y2 * sy)
+            rcrop_w, rcrop_h = rx2 - rx1, ry2 - ry1
+
+            subprocess.run(
+                ["sips", "--cropOffset", str(ry1), str(rx1),
+                 "--cropToHeightWidth", str(rcrop_h), str(rcrop_w),
                  tmp_full, "--out", tmp_crop],
                 capture_output=True, timeout=10,
             )
@@ -757,7 +798,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             screenshot_path = f"/tmp/hermes_zoom_{_uuid.uuid4().hex[:8]}.png"
             with open(screenshot_path, "wb") as f:
                 f.write(crop_bytes)
-            _zoom_summary = f"Zoomed region ({x1},{y1})-({x2},{y2}) = {crop_w}x{crop_h}px MEDIA:{screenshot_path}"
+            _zoom_summary = f"Zoomed region ({x1},{y1})-({x2},{y2}) = {rcrop_w}x{rcrop_h}px (Retina) MEDIA:{screenshot_path}"
             # Debug: log zoom result
             try:
                 _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -828,12 +869,12 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     }
     if action in _AUTO_SCREENSHOT_ACTIONS:
         try:
-            time.sleep(0.3)  # Brief pause for UI to settle
+            time.sleep(1.0)  # Wait for UI to render before capturing
             b64_data, img_w, img_h, img_media = _take_screenshot()
             try:
                 _mx, _my = _pag.position()
-                _img_mx = int(_mx * img_w / actual_w) if actual_w else _mx
-                _img_my = int(_my * img_h / actual_h) if actual_h else _my
+                _img_mx = round(_mx * img_w / actual_w) if actual_w else _mx
+                _img_my = round(_my * img_h / actual_h) if actual_h else _my
                 _cursor_info = f" Cursor at ({_img_mx}, {_img_my})."
             except Exception:
                 _cursor_info = ""

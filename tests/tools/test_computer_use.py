@@ -593,15 +593,15 @@ class TestZoomAction:
         assert result["content_blocks"][0]["type"] == "image"
         assert "Zoomed region" in result["text_summary"]
 
-    @patch("tools.computer_use_tool._take_screenshot", side_effect=RuntimeError("capture failed"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
-    def test_zoom_screenshot_error(self, _size, _screenshot):
-        """Zoom should return error JSON if screenshot fails."""
+    def test_zoom_screenshot_error(self, _size):
+        """Zoom should return error JSON if screencapture fails."""
         from tools.computer_use_tool import handle_computer_use
-        result = handle_computer_use({"action": "zoom", "region": [0, 0, 100, 100]})
-        assert isinstance(result, str)
-        parsed = json.loads(result)
-        assert "error" in parsed
+        with patch("subprocess.run", side_effect=RuntimeError("capture failed")):
+            result = handle_computer_use({"action": "zoom", "region": [0, 0, 100, 100]})
+            assert isinstance(result, str)
+            parsed = json.loads(result)
+            assert "error" in parsed
 
 
 class TestTempFileCleanup:
