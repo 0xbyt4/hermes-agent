@@ -149,10 +149,10 @@ def _forbids_sampling_params(model: str) -> bool:
 # that still gate on the headers continue to get the enhanced features.
 # Migration guide: remove these if you no longer support ≤4.5 models.
 _COMMON_BETAS = [
-    "interleaved-thinking-2025-05-14",
-    "fine-grained-tool-streaming-2025-05-14",
     "computer-use-2025-11-24",
     "context-management-2025-06-27",
+    # interleaved-thinking and fine-grained-tool-streaming are GA
+    # in Claude 4.6 — no longer need beta headers.
 ]
 # MiniMax's Anthropic-compatible endpoints fail tool-use requests when
 # the fine-grained tool streaming beta is present.  Omit it so tool calls
