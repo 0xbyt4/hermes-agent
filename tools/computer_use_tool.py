@@ -658,23 +658,6 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     """
     action = args.get("action", "")
 
-    # Debug log every tool call
-    try:
-        import pyautogui as _dbg_pag
-        _dbg_pos = _dbg_pag.position()
-        _args_str = json.dumps({k: v for k, v in args.items() if k != "action"}, default=str)[:200]
-        _debug_log(f"action={action} args={_args_str} cursor_before=({_dbg_pos.x},{_dbg_pos.y})")
-    except Exception:
-        pass
-
-    if action not in ALL_ACTIONS:
-        return json.dumps({"error": f"Unknown action: {action}. Valid: {ALL_ACTIONS}"})
-
-    # NOTE: Approval for destructive actions is disabled during beta.
-    # The computer_use tool is gated behind an explicit toolset flag and
-    # gateway allowed_users filtering provides access control.
-    # TODO: Re-enable approval with proper gateway async flow support.
-
     # Coordinate scaling: Screenshots are resized to logical resolution
     # (pyautogui coordinate space). If further downscaled beyond that,
     # we need to scale back up. Otherwise coordinates are 1:1.
@@ -690,6 +673,26 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
         image_w, image_h, _ = _compute_scale(actual_w, actual_h)
 
     needs_scaling = (image_w != actual_w or image_h != actual_h)
+
+    def _screen_to_image(sx: int, sy: int) -> Tuple[int, int]:
+        """Convert screen-space coordinates to image-space for consistent debug logging."""
+        if not needs_scaling:
+            return sx, sy
+        return round(sx * image_w / actual_w), round(sy * image_h / actual_h)
+
+    # Debug log every tool call — all coordinates in image space (what Claude sees)
+    try:
+        import pyautogui as _dbg_pag
+        _dbg_pos = _dbg_pag.position()
+        _img_pos = _screen_to_image(_dbg_pos.x, _dbg_pos.y)
+        _args_str = json.dumps({k: v for k, v in args.items() if k != "action"}, default=str)[:200]
+        _debug_log(f"action={action} args={_args_str} cursor=({_img_pos[0]},{_img_pos[1]})")
+    except Exception:
+        pass
+
+    if action not in ALL_ACTIONS:
+        return json.dumps({"error": f"Unknown action: {action}. Valid: {ALL_ACTIONS}"})
+
     if needs_scaling:
         _debug_log(f"  scaling: image={image_w}x{image_h} -> screen={actual_w}x{actual_h}")
 
@@ -890,10 +893,11 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
         if _modifier:
             _pag.keyUp(_modifier)
 
-    # Debug: log cursor position after action
+    # Debug: log cursor position after action (image space for consistency)
     try:
         _dbg_pos_after = _pag.position()
-        _debug_log(f"  -> result: {status[:100]} cursor_after=({_dbg_pos_after.x},{_dbg_pos_after.y})")
+        _img_after = _screen_to_image(_dbg_pos_after.x, _dbg_pos_after.y)
+        _debug_log(f"  -> {status[:100]} cursor=({_img_after[0]},{_img_after[1]})")
     except Exception:
         pass
 
