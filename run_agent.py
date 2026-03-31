@@ -5622,6 +5622,11 @@ class AIAgent:
                     f"exceeding the {MAX_TOOL_RESULT_CHARS:,} char limit]"
                 )
 
+            # Redact secrets before entering LLM context (concurrent path)
+            if isinstance(function_result, str):
+                from agent.redact import redact_sensitive_text
+                function_result = redact_sensitive_text(function_result)
+
             # Append tool result message in order
             tool_msg = {
                 "role": "tool",
