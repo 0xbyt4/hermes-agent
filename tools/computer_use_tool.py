@@ -285,13 +285,23 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
 
         if scale < 1.0:
             new_w = int(img_w * scale)
-            # Derive height from width to match sips --resampleWidth behavior
-            new_h = round(img_h * new_w / img_w)
             subprocess.run(
                 ["sips", "--resampleWidth", str(new_w), tmp_path],
                 capture_output=True, timeout=10,
             )
-            img_w, img_h = new_w, new_h
+            # Read actual dimensions after resize — sips may round height
+            # differently than Python (off by 1px), and _cached_screenshot_size
+            # must match the real image pixels Claude sees.
+            _resized = subprocess.run(
+                ["sips", "-g", "pixelWidth", "-g", "pixelHeight", tmp_path],
+                capture_output=True, text=True, timeout=5,
+            )
+            img_w, img_h = new_w, round(img_h * new_w / img_w)  # fallback
+            for _line in _resized.stdout.strip().splitlines():
+                if "pixelWidth" in _line:
+                    img_w = int(_line.split(":")[-1].strip())
+                elif "pixelHeight" in _line:
+                    img_h = int(_line.split(":")[-1].strip())
 
         # Keep PNG format — token cost is pixel-based (width*height/750),
         # not byte-based, so PNG vs JPEG costs the same tokens. But PNG
@@ -646,7 +656,12 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     if _cached_screenshot_size:
         image_w, image_h = _cached_screenshot_size
     else:
-        image_w, image_h = actual_w, actual_h
+        # Before the first screenshot, estimate image dimensions using the
+        # same logic as get_native_tool_definition(). Without this, the tool
+        # definition tells Claude a smaller display (e.g. 1304x846) while
+        # the scaler assumes actual screen size (e.g. 1470x956), causing
+        # coordinates to land ~80px off on the first click.
+        image_w, image_h, _ = _compute_scale(actual_w, actual_h)
 
     needs_scaling = (image_w != actual_w or image_h != actual_h)
 
