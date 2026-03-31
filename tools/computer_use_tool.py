@@ -39,6 +39,32 @@ logger = logging.getLogger(__name__)
 # Debug log path — use hermes logs directory instead of world-readable /tmp
 _DEBUG_LOG_DIR = get_hermes_home() / "logs"
 _DEBUG_LOG_PATH = _DEBUG_LOG_DIR / "computer_debug.log"
+_DEBUG_LOG_MAX_BYTES = 2 * 1024 * 1024  # 2MB — rotate when exceeded
+_debug_log_ready = False  # mkdir guard — avoid repeated I/O
+
+
+def _debug_log(line: str) -> None:
+    """Append a line to the computer use debug log.
+
+    Creates log directory on first call. Rotates the log file when it
+    exceeds _DEBUG_LOG_MAX_BYTES by keeping the latest half.
+    """
+    global _debug_log_ready
+    try:
+        if not _debug_log_ready:
+            _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            _debug_log_ready = True
+        # Rotate if file is too large
+        if _DEBUG_LOG_PATH.exists() and _DEBUG_LOG_PATH.stat().st_size > _DEBUG_LOG_MAX_BYTES:
+            content = _DEBUG_LOG_PATH.read_text(errors="replace")
+            half = len(content) // 2
+            # Cut at a newline boundary to avoid broken lines
+            cut = content.index("\n", half) + 1 if "\n" in content[half:] else half
+            _DEBUG_LOG_PATH.write_text(f"[log rotated — older entries trimmed]\n{content[cut:]}")
+        with open(_DEBUG_LOG_PATH, "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
+    except Exception:
+        pass
 
 # Approval callback — registered by CLI at startup for prompt_toolkit integration.
 # Same pattern as terminal_tool._approval_callback.
@@ -517,6 +543,7 @@ def _execute_action(action: str, args: Dict[str, Any],
         for pattern in _BLOCKED_TYPE_PATTERNS:
             if pattern.search(text):
                 logger.warning("Blocked dangerous type content: %s", text[:100])
+                _debug_log(f"  BLOCKED type pattern: {text[:100]}")
                 return f"error: blocked — text contains dangerous command pattern"
         # Always use clipboard paste — pyautogui.write() depends on the active
         # keyboard layout (e.g. Turkish layout maps '.' differently) and only
@@ -543,6 +570,7 @@ def _execute_action(action: str, args: Dict[str, Any],
         keys = [_KEY_NAME_MAP.get(k.lower(), k.lower()) for k in raw_keys]
         # Block irreversible key combos (empty trash, lock screen, log out)
         if frozenset(keys) in _BLOCKED_KEY_COMBOS:
+            _debug_log(f"  BLOCKED key combo: {'+'.join(keys)}")
             return f"error: key combo '{'+'.join(keys)}' is blocked — irreversible action"
         if len(keys) == 1:
             pyautogui.press(keys[0])
@@ -634,10 +662,8 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     try:
         import pyautogui as _dbg_pag
         _dbg_pos = _dbg_pag.position()
-        _dbg_line = f"{time.strftime('%H:%M:%S')} action={action} args={json.dumps({k:v for k,v in args.items() if k != 'action'}, default=str)[:200]} cursor_before=({_dbg_pos.x},{_dbg_pos.y})\n"
-        _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(_DEBUG_LOG_PATH, "a") as _dbg_f:
-            _dbg_f.write(_dbg_line)
+        _args_str = json.dumps({k: v for k, v in args.items() if k != "action"}, default=str)[:200]
+        _debug_log(f"action={action} args={_args_str} cursor_before=({_dbg_pos.x},{_dbg_pos.y})")
     except Exception:
         pass
 
@@ -664,6 +690,8 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
         image_w, image_h, _ = _compute_scale(actual_w, actual_h)
 
     needs_scaling = (image_w != actual_w or image_h != actual_h)
+    if needs_scaling:
+        _debug_log(f"  scaling: image={image_w}x{image_h} -> screen={actual_w}x{actual_h}")
 
     def _scale_coord(x: int, y: int) -> Tuple[int, int]:
         if not needs_scaling:
@@ -714,9 +742,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             _text_summary = f"Screenshot taken ({img_w}x{img_h}).{_cursor_info} MEDIA:{screenshot_path}"
             # Debug: log screenshot result
             try:
-                _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
-                with open(_DEBUG_LOG_PATH, "a") as _dbg_f:
-                    _dbg_f.write(f"  -> result: {_text_summary[:150]}\n")
+                _debug_log(f"  -> screenshot: {img_w}x{img_h} {img_media} {screenshot_path}")
             except Exception:
                 pass
             return {
@@ -817,13 +843,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             with open(screenshot_path, "wb") as f:
                 f.write(crop_bytes)
             _zoom_summary = f"Zoomed region ({x1},{y1})-({x2},{y2}) = {rcrop_w}x{rcrop_h}px (Retina) MEDIA:{screenshot_path}"
-            # Debug: log zoom result
-            try:
-                _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
-                with open(_DEBUG_LOG_PATH, "a") as _dbg_f:
-                    _dbg_f.write(f"  -> result: {_zoom_summary[:150]}\n")
-            except Exception:
-                pass
+            _debug_log(f"  -> zoom: ({x1},{y1})-({x2},{y2}) retina={rcrop_w}x{rcrop_h} {screenshot_path}")
             return {
                 "_multimodal": True,
                 "content_blocks": [
@@ -864,6 +884,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
                                   actual_w=actual_w, actual_h=actual_h)
     except Exception as e:
         logger.error("Action %s failed: %s", action, e)
+        _debug_log(f"  ERROR: action={action} {e}")
         return json.dumps({"error": f"Action '{action}' failed: {e}"})
     finally:
         if _modifier:
@@ -872,9 +893,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     # Debug: log cursor position after action
     try:
         _dbg_pos_after = _pag.position()
-        _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(_DEBUG_LOG_PATH, "a") as _dbg_f:
-            _dbg_f.write(f"  -> result: {status[:100]} cursor_after=({_dbg_pos_after.x},{_dbg_pos_after.y})\n")
+        _debug_log(f"  -> result: {status[:100]} cursor_after=({_dbg_pos_after.x},{_dbg_pos_after.y})")
     except Exception:
         pass
 
@@ -902,12 +921,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
             with open(screenshot_path, "wb") as f:
                 f.write(base64.b64decode(b64_data))
             _text_summary = f"{status}.{_cursor_info} MEDIA:{screenshot_path}"
-            try:
-                _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
-                with open(_DEBUG_LOG_PATH, "a") as _dbg_f:
-                    _dbg_f.write(f"  -> auto-screenshot: {_text_summary[:150]}\n")
-            except Exception:
-                pass
+            _debug_log(f"  -> auto-screenshot: {img_w}x{img_h} {screenshot_path}")
             return {
                 "_multimodal": True,
                 "content_blocks": [
