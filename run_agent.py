@@ -2629,8 +2629,8 @@ class AIAgent:
                         "the computer tool.]"
                     )
                     tool_guidance.append(_build_skill_message(_cu_loaded, _cu_dir, _cu_note))
-            except Exception:
-                pass  # Skill not found or error — guidance alone is enough
+            except Exception as e:
+                logger.debug("Failed to auto-load macos-computer-use skill: %s", e)
         if tool_guidance:
             prompt_parts.append(" ".join(tool_guidance))
 
@@ -4984,7 +4984,8 @@ class AIAgent:
         try:
             from tools.computer_use_tool import get_native_tool_definition
             return [get_native_tool_definition()]
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to load native computer_use tool definition: %s", e)
             return None
 
     def _get_context_management(self) -> Optional[dict]:
@@ -5870,7 +5871,12 @@ class AIAgent:
                 result = f"Error executing tool '{function_name}': {tool_error}"
                 logger.error("_invoke_tool raised for %s: %s", function_name, tool_error, exc_info=True)
             duration = time.time() - start
-            is_error, _ = _detect_tool_failure(function_name, result)
+            # Multimodal results (e.g. computer_use screenshots) are dicts —
+            # _detect_tool_failure expects a string, so skip error detection for them.
+            _is_multimodal = isinstance(result, dict) and result.get("_multimodal")
+            is_error = False
+            if not _is_multimodal:
+                is_error, _ = _detect_tool_failure(function_name, result)
             results[index] = (function_name, function_args, result, duration, is_error)
 
         # Start spinner for CLI mode (skip when TUI handles tool progress)
@@ -5904,23 +5910,59 @@ class AIAgent:
                 # Shouldn't happen, but safety fallback
                 function_result = f"Error executing tool '{name}': thread did not return a result"
                 tool_duration = 0.0
+                is_error = True
             else:
                 function_name, function_args, function_result, tool_duration, is_error = r
 
+            # Handle multimodal results (e.g. computer_use screenshots) —
+            # same pattern as the sequential path in _execute_tool_calls.
+            _is_multimodal = isinstance(function_result, dict) and function_result.get("_multimodal")
+            if _is_multimodal:
+                _text_summary = function_result.get("text_summary", "")
+                _content_blocks = function_result.get("content_blocks", [])
+                result_preview = _text_summary
+
+                if is_error:
+                    logger.warning("Tool %s returned error (%.2fs): %s", name, tool_duration, result_preview)
+
+                if self.verbose_logging:
+                    logging.debug(f"Tool {name} completed in {tool_duration:.2f}s")
+                    logging.debug(f"Tool result (multimodal): {result_preview}")
+
+                # Print cute message per tool
+                if self.quiet_mode:
+                    cute_msg = _get_cute_tool_message_impl(name, args, tool_duration, result=_text_summary)
+                    self._safe_print(f"  {cute_msg}")
+                elif self.verbose_logging:
+                    print(f"  ✅ Tool {i+1} completed in {tool_duration:.2f}s")
+                    print(f"     Result: {result_preview}")
+                else:
+                    _rp = result_preview[:self.log_prefix_chars] + "..." if len(result_preview) > self.log_prefix_chars else result_preview
+                    print(f"  ✅ Tool {i+1} completed in {tool_duration:.2f}s - {_rp}")
+
+                tool_msg = {
+                    "role": "tool",
+                    "content": _text_summary or "(screenshot taken)",
+                    "_anthropic_content_blocks": _content_blocks,
+                    "tool_call_id": tc.id,
+                }
+            else:
+                if not isinstance(function_result, str):
+                    function_result = json.dumps(function_result) if function_result else ""
+
                 if is_error:
                     result_preview = function_result[:200] if len(function_result) > 200 else function_result
-                    logger.warning("Tool %s returned error (%.2fs): %s", function_name, tool_duration, result_preview)
+                    logger.warning("Tool %s returned error (%.2fs): %s", name, tool_duration, result_preview)
 
                 if self.verbose_logging:
-                    logging.debug(f"Tool {function_name} completed in {tool_duration:.2f}s")
+                    logging.debug(f"Tool {name} completed in {tool_duration:.2f}s")
                     logging.debug(f"Tool result ({len(function_result)} chars): {function_result}")
 
-            # Print cute message per tool
-            if self.quiet_mode:
-                cute_msg = _get_cute_tool_message_impl(name, args, tool_duration, result=function_result)
-                self._safe_print(f"  {cute_msg}")
-            elif not self.quiet_mode:
-                if self.verbose_logging:
+                # Print cute message per tool
+                if self.quiet_mode:
+                    cute_msg = _get_cute_tool_message_impl(name, args, tool_duration, result=function_result)
+                    self._safe_print(f"  {cute_msg}")
+                elif self.verbose_logging:
                     print(f"  ✅ Tool {i+1} completed in {tool_duration:.2f}s")
                     print(f"     Result: {function_result}")
                 else:
@@ -5943,7 +5985,6 @@ class AIAgent:
                     f"exceeding the {MAX_TOOL_RESULT_CHARS:,} char limit]"
                 )
 
-            # Append tool result message in order
             tool_msg = {
                 "role": "tool",
                 "content": function_result,

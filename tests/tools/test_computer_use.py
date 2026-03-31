@@ -156,7 +156,7 @@ class TestHandleComputerUse:
         parsed = json.loads(result)
         assert "error" in parsed
 
-    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/png"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     def test_screenshot_returns_multimodal(self, _size, _screenshot):
         from tools.computer_use_tool import handle_computer_use
@@ -165,7 +165,7 @@ class TestHandleComputerUse:
         assert result["_multimodal"] is True
         assert result["content_blocks"][0]["type"] == "image"
         assert result["content_blocks"][0]["source"]["data"] == "AAAA"
-        assert result["content_blocks"][0]["source"]["media_type"] == "image/jpeg"
+        assert result["content_blocks"][0]["source"]["media_type"] == "image/png"
         assert "MEDIA:" in result["text_summary"]
 
     @patch("tools.computer_use_tool._take_screenshot", side_effect=RuntimeError("screencapture failed"))
@@ -183,7 +183,7 @@ class TestHandleComputerUse:
 class TestCoordinateParsing:
     """Test JSON string coordinate parsing."""
 
-    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/png"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     @patch("tools.computer_use_tool._cached_screenshot_size", (1024, 768))
     def test_string_coordinate_parsed(self, _size, _screenshot):
@@ -198,7 +198,7 @@ class TestCoordinateParsing:
                 parsed = json.loads(result)
                 assert parsed.get("success") is True
 
-    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/png"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     @patch("tools.computer_use_tool._cached_screenshot_size", (1024, 768))
     def test_string_list_coordinate_parsed(self, _size, _screenshot):
@@ -250,26 +250,26 @@ class TestActionResults:
                 assert "error" in parsed.get("status", "")
 
     @patch("tools.computer_use_tool._cleanup_temp_files")
-    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/png"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     def test_screenshot_saves_file(self, _size, _screenshot, _cleanup):
-        """Screenshot should save to a unique /tmp/hermes_screenshot_<id>.jpg path."""
+        """Screenshot should save to a unique /tmp/hermes_screenshot_<id>.png path."""
         from tools.computer_use_tool import handle_computer_use
         result = handle_computer_use({"action": "screenshot"})
         assert isinstance(result, dict)
         # Extract the file path from text_summary
-        match = re.search(r"MEDIA:(/tmp/hermes_screenshot_[a-f0-9]+\.jpg)", result["text_summary"])
+        match = re.search(r"MEDIA:(/tmp/hermes_screenshot_[a-f0-9]+\.png)", result["text_summary"])
         assert match is not None, f"No MEDIA path found in: {result['text_summary']}"
         assert os.path.exists(match.group(1))
 
-    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/png"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     def test_screenshot_media_tag_has_correct_path(self, _size, _screenshot):
         """MEDIA: tag should contain /tmp/hermes_screenshot_ prefix."""
         from tools.computer_use_tool import handle_computer_use
         result = handle_computer_use({"action": "screenshot"})
         assert "MEDIA:/tmp/hermes_screenshot_" in result["text_summary"]
-        assert ".jpg" in result["text_summary"]
+        assert ".png" in result["text_summary"]
 
 
 class TestDragCoordinates:
@@ -334,23 +334,25 @@ class TestHorizontalScroll:
         with patch.dict("sys.modules", {"pyautogui": self.mock_pag}):
             yield
 
-    def test_scroll_left_positive(self):
+    def test_scroll_left_negative(self):
         from tools.computer_use_tool import _execute_action
         result = _execute_action("scroll", {"scroll_direction": "left", "scroll_amount": 3})
-        self.mock_pag.hscroll.assert_called_once_with(3)
+        # pyautogui.hscroll: positive = right, negative = left
+        self.mock_pag.hscroll.assert_called_once_with(-3)
         assert "scrolled left" in result
 
-    def test_scroll_right_negative(self):
+    def test_scroll_right_positive(self):
         from tools.computer_use_tool import _execute_action
         result = _execute_action("scroll", {"scroll_direction": "right", "scroll_amount": 3})
-        self.mock_pag.hscroll.assert_called_once_with(-3)
+        # pyautogui.hscroll: positive = right, negative = left
+        self.mock_pag.hscroll.assert_called_once_with(3)
         assert "scrolled right" in result
 
     def test_scroll_at_coordinate(self):
         from tools.computer_use_tool import _execute_action
         _execute_action("scroll", {"scroll_direction": "left", "scroll_amount": 2, "coordinate": [500, 300]})
         self.mock_pag.moveTo.assert_called_once_with(500, 300)
-        self.mock_pag.hscroll.assert_called_once_with(2)
+        self.mock_pag.hscroll.assert_called_once_with(-2)
 
 
 class TestMiddleClick:
@@ -548,7 +550,7 @@ class TestModifierKeys:
 class TestZoomAction:
     """Test zoom action for region-based screenshots."""
 
-    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/png"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     def test_zoom_missing_region_returns_error(self, _size, _screenshot):
         from tools.computer_use_tool import handle_computer_use
@@ -557,7 +559,7 @@ class TestZoomAction:
         assert "error" in parsed
         assert "region" in parsed["error"]
 
-    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/png"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     def test_zoom_invalid_region_length(self, _size, _screenshot):
         from tools.computer_use_tool import handle_computer_use
@@ -566,7 +568,7 @@ class TestZoomAction:
         assert "error" in parsed
 
     @patch("tools.computer_use_tool.subprocess")
-    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/jpeg"))
+    @patch("tools.computer_use_tool._take_screenshot", return_value=("AAAA", 1024, 768, "image/png"))
     @patch("tools.computer_use_tool._get_screen_size", return_value=(1024, 768))
     def test_zoom_valid_region_returns_multimodal(self, _size, _screenshot, mock_subprocess):
         """Zoom with valid region should return multimodal dict."""
