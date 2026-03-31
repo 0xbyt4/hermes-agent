@@ -103,7 +103,7 @@ The cursor is your primary tool for interacting with any visible UI element — 
 | `left_mouse_up` | Release left button (Quartz-based) |
 | `type` | Type text via clipboard paste (works with all keyboard layouts and Unicode) |
 | `key` | Press key or key combo (e.g. `command+c`, `Return`, `Escape`) |
-| `hold_key` | Press and hold a key for a duration (e.g. hold `shift` for 2s) |
+| `hold_key` | Press and hold a key for a duration (max 5s, e.g. hold `shift` for 2s) |
 | `scroll` | Scroll up/down/left/right at coordinates |
 | `zoom` | Inspect a small screen region at full resolution |
 | `wait` | Pause execution (max 10s per call) |

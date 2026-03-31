@@ -227,10 +227,10 @@ def scale_coordinates_to_screen(
 # ---------------------------------------------------------------------------
 
 def _take_screenshot() -> Tuple[str, int, int, str]:
-    """Capture screenshot, resize, convert to JPEG, return (base64_data, image_w, image_h, media_type).
+    """Capture screenshot, resize to API limits, return (base64_data, image_w, image_h, media_type).
 
-    Uses macOS native `screencapture` for capture and `sips` for resizing/conversion.
-    No Python imaging dependencies required.
+    Uses macOS native `screencapture` for capture and `sips` for resizing.
+    Returns PNG format for text sharpness. No Python imaging dependencies required.
     """
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
         tmp_path = f.name
@@ -552,10 +552,13 @@ def _execute_action(action: str, args: Dict[str, Any],
         amount = int(args.get("scroll_amount", 3))
         if coordinate:
             pyautogui.moveTo(coordinate[0], coordinate[1])
-        clicks = amount if direction in ("up", "left") else -amount
         if direction in ("up", "down"):
+            # pyautogui.scroll: positive = up, negative = down
+            clicks = amount if direction == "up" else -amount
             pyautogui.scroll(clicks)
         else:
+            # pyautogui.hscroll: positive = right, negative = left
+            clicks = -amount if direction == "left" else amount
             pyautogui.hscroll(clicks)
         return f"scrolled {direction} by {amount}"
 

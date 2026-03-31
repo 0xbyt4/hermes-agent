@@ -179,7 +179,7 @@ The tool is gated behind a requirements check — it only loads on macOS when `p
 - **macOS only** — not available on Linux or Windows
 - **Anthropic provider only** — requires `anthropic_messages` API mode (uses beta API)
 - **Primary display only** — multi-monitor setups: secondary displays are not visible
-- **Coordinate accuracy**: ~5-10px tolerance, small UI targets may need retry
+- **Coordinate accuracy**: ~1-2px after scaling — precise for most UI targets
 - **Type overwrites clipboard** — the `type` action uses `pbcopy` + `Cmd+V`
 - **Scroll unreliable** — use keyboard shortcuts (`space`, `Page_Down`) as fallback
 - **Wait capped at 10s** — chain multiple waits for longer pauses
