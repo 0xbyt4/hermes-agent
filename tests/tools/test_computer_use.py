@@ -1061,8 +1061,8 @@ class TestImageEviction:
                                         images += 1
                                     if "removed" in str(b.get("text", "")):
                                         placeholders += 1
-        assert images == 1, f"Expected 1 kept image, got {images}"
-        assert placeholders == 9, f"Expected 9 placeholders, got {placeholders}"
+        assert images == 3, f"Expected 3 kept images, got {images}"
+        assert placeholders == 7, f"Expected 7 placeholders, got {placeholders}"
 
     def test_preserves_text_blocks(self):
         """Text blocks inside tool_result should survive eviction."""
@@ -1099,9 +1099,10 @@ class TestImageEviction:
                             texts = [b.get("text", "") for b in inner if b.get("type") == "text"]
                             all_text = " ".join(texts)
                             if "Screenshot taken" in all_text:
-                                # Old screenshot: image should be replaced
+                                # With _MAX_KEEP_IMAGES=3, both screenshots
+                                # (only 2 total) should keep their images.
                                 has_image = any(b.get("type") == "image" for b in inner)
-                                assert not has_image, "Old screenshot should have image replaced"
+                                assert has_image, "Screenshot within keep limit should retain image"
 
 
 class TestRequirementsQuartz:

@@ -8538,22 +8538,35 @@ class AIAgent:
                 except Exception as cb_err:
                     logging.debug(f"Tool complete callback error: {cb_err}")
 
-            function_result = maybe_persist_tool_result(
-                content=function_result,
-                tool_name=name,
-                tool_use_id=tc.id,
-                env=get_active_env(effective_task_id),
-            )
+            # For non-multimodal results, apply persist/truncation and build tool_msg.
+            # Multimodal results already have tool_msg built above with
+            # _anthropic_content_blocks — do NOT overwrite it.
+            if not _is_multimodal:
+                function_result = maybe_persist_tool_result(
+                    content=function_result,
+                    tool_name=name,
+                    tool_use_id=tc.id,
+                    env=get_active_env(effective_task_id),
+                )
 
-            subdir_hints = self._subdirectory_hints.check_tool_call(name, args)
-            if subdir_hints:
-                function_result += subdir_hints
+                subdir_hints = self._subdirectory_hints.check_tool_call(name, args)
+                if subdir_hints:
+                    function_result += subdir_hints
 
-            tool_msg = {
-                "role": "tool",
-                "content": function_result,
-                "tool_call_id": tc.id,
-            }
+                MAX_TOOL_RESULT_CHARS = 100_000
+                if len(function_result) > MAX_TOOL_RESULT_CHARS:
+                    original_len = len(function_result)
+                    function_result = (
+                        function_result[:MAX_TOOL_RESULT_CHARS]
+                        + f"\n\n[Truncated: tool response was {original_len:,} chars, "
+                        f"exceeding the {MAX_TOOL_RESULT_CHARS:,} char limit]"
+                    )
+
+                tool_msg = {
+                    "role": "tool",
+                    "content": function_result,
+                    "tool_call_id": tc.id,
+                }
             messages.append(tool_msg)
 
         # ── Per-turn aggregate budget enforcement ─────────────────────────
@@ -8947,23 +8960,26 @@ class AIAgent:
                 except Exception as cb_err:
                     logging.debug(f"Tool complete callback error: {cb_err}")
 
-            function_result = maybe_persist_tool_result(
-                content=function_result,
-                tool_name=function_name,
-                tool_use_id=tool_call.id,
-                env=get_active_env(effective_task_id),
-            )
+            # Non-multimodal only: persist large results, discover subdir hints, rebuild tool_msg.
+            # Multimodal results keep the tool_msg built above with _anthropic_content_blocks.
+            if not _is_multimodal:
+                function_result = maybe_persist_tool_result(
+                    content=function_result,
+                    tool_name=function_name,
+                    tool_use_id=tool_call.id,
+                    env=get_active_env(effective_task_id),
+                )
 
-            # Discover subdirectory context files from tool arguments
-            subdir_hints = self._subdirectory_hints.check_tool_call(function_name, function_args)
-            if subdir_hints:
-                function_result += subdir_hints
+                # Discover subdirectory context files from tool arguments
+                subdir_hints = self._subdirectory_hints.check_tool_call(function_name, function_args)
+                if subdir_hints:
+                    function_result += subdir_hints
 
-            tool_msg = {
-                "role": "tool",
-                "content": function_result,
-                "tool_call_id": tool_call.id
-            }
+                tool_msg = {
+                    "role": "tool",
+                    "content": function_result,
+                    "tool_call_id": tool_call.id
+                }
             messages.append(tool_msg)
 
             if not self.quiet_mode:
