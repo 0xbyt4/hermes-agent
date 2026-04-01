@@ -59,7 +59,10 @@ DANGEROUS_PATTERNS = [
     # Any shell invocation via -c or combined flags like -lc, -ic, etc.
     (r'\b(bash|sh|zsh|ksh)\s+-[^\s]*c(\s+|$)', "shell command via -c/-lc flag"),
     (r'\b(python[23]?|perl|ruby|node)\s+-[ec]\s+', "script execution via -e/-c flag"),
-    (r'\b(curl|wget)\b.*\|\s*(ba)?sh\b', "pipe remote content to shell"),
+    (r'\b(curl|wget)\b.*\|\s*(sudo\s+(-\S+\s+)*)?(ba)?sh\b', "pipe remote content to shell"),
+    (r'\b(curl|wget)\b.*\|\s*(sudo\s+(-\S+\s+)*)?(python[23]?|perl|ruby|node)\b', "pipe remote content to interpreter"),
+    (r'\b(curl|wget)\b\s+[^\|]*-[^\s]*o\s+\S+.*&&.*(\bchmod\b|\bsh\b|\bbash\b|\bpython)', "download and execute pattern"),
+    (r'\b(curl|wget)\b\s+[^\|]*-[^\s]*o\s+\S+.*;\s*(\bchmod\b|\bsh\b|\bbash\b|\bpython)', "download and execute pattern"),
     (r'\b(bash|sh|zsh|ksh)\s+<\s*<?\s*\(\s*(curl|wget)\b', "execute remote script via process substitution"),
     (rf'\btee\b.*["\']?{_SENSITIVE_WRITE_TARGET}', "overwrite system file via tee"),
     (rf'>>?\s*["\']?{_SENSITIVE_WRITE_TARGET}', "overwrite system file via redirection"),
