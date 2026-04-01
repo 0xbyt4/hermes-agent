@@ -5975,21 +5975,24 @@ class AIAgent:
                 except Exception as cb_err:
                     logging.debug(f"Tool complete callback error: {cb_err}")
 
-            # Truncate oversized results
-            MAX_TOOL_RESULT_CHARS = 100_000
-            if len(function_result) > MAX_TOOL_RESULT_CHARS:
-                original_len = len(function_result)
-                function_result = (
-                    function_result[:MAX_TOOL_RESULT_CHARS]
-                    + f"\n\n[Truncated: tool response was {original_len:,} chars, "
-                    f"exceeding the {MAX_TOOL_RESULT_CHARS:,} char limit]"
-                )
+            # For non-multimodal results, apply truncation and build tool_msg.
+            # Multimodal results already have tool_msg built above with
+            # _anthropic_content_blocks — do NOT overwrite it.
+            if not _is_multimodal:
+                MAX_TOOL_RESULT_CHARS = 100_000
+                if len(function_result) > MAX_TOOL_RESULT_CHARS:
+                    original_len = len(function_result)
+                    function_result = (
+                        function_result[:MAX_TOOL_RESULT_CHARS]
+                        + f"\n\n[Truncated: tool response was {original_len:,} chars, "
+                        f"exceeding the {MAX_TOOL_RESULT_CHARS:,} char limit]"
+                    )
 
-            tool_msg = {
-                "role": "tool",
-                "content": function_result,
-                "tool_call_id": tc.id,
-            }
+                tool_msg = {
+                    "role": "tool",
+                    "content": function_result,
+                    "tool_call_id": tc.id,
+                }
             messages.append(tool_msg)
 
         # ── Budget pressure injection ────────────────────────────────────
@@ -6285,24 +6288,6 @@ class AIAgent:
                 except Exception as cb_err:
                     logging.debug(f"Tool complete callback error: {cb_err}")
 
-            # Guard against tools returning absurdly large content that would
-            # blow up the context window. 100K chars ≈ 25K tokens — generous
-            # enough for any reasonable tool output but prevents catastrophic
-            # context explosions (e.g. accidental base64 image dumps).
-            MAX_TOOL_RESULT_CHARS = 100_000
-            if len(function_result) > MAX_TOOL_RESULT_CHARS:
-                original_len = len(function_result)
-                function_result = (
-                    function_result[:MAX_TOOL_RESULT_CHARS]
-                    + f"\n\n[Truncated: tool response was {original_len:,} chars, "
-                    f"exceeding the {MAX_TOOL_RESULT_CHARS:,} char limit]"
-                )
-
-            tool_msg = {
-                "role": "tool",
-                "content": function_result,
-                "tool_call_id": tool_call.id
-            }
             messages.append(tool_msg)
 
             if not self.quiet_mode:

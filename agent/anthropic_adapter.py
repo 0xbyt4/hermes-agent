@@ -1177,7 +1177,7 @@ def convert_messages_to_anthropic(
     # The model almost always decides based on the most recent screenshot
     # alone, so keeping 1 is the best default. Increase only if the agent
     # needs explicit before/after comparison for a specific workflow.
-    _MAX_KEEP_IMAGES = 1
+    _MAX_KEEP_IMAGES = 3
     _image_count = 0
     for msg in reversed(result):
         content = msg.get("content")
