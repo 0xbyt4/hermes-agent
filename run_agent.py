@@ -7442,6 +7442,8 @@ class AIAgent:
                                 written = getattr(details, 'cache_write_tokens', 0) or 0 if details else 0
                             prompt = usage_dict["prompt_tokens"]
                             hit_pct = (cached / prompt * 100) if prompt > 0 else 0
+                            # Always log cache stats (even in quiet_mode) for diagnostics
+                            logging.info("Cache: %s/%s tokens (%.0f%% hit, %s written)", f"{cached:,}", f"{prompt:,}", hit_pct, f"{written:,}")
                             if not self.quiet_mode:
                                 self._vprint(f"{self.log_prefix}   💾 Cache: {cached:,}/{prompt:,} tokens ({hit_pct:.0f}% hit, {written:,} written)")
                     
