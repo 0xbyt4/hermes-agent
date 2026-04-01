@@ -78,6 +78,21 @@ DANGEROUS_PATTERNS = [
     (r'\b(cp|mv|install)\b.*\s/etc/', "copy/move file into /etc/"),
     (r'\bsed\s+-[^\s]*i.*\s/etc/', "in-place edit of system config"),
     (r'\bsed\s+--in-place\b.*\s/etc/', "in-place edit of system config (long flag)"),
+    # Execute scripts/binaries from world-writable temp directories
+    (r'\b(bash|sh|zsh|ksh)\s+/(tmp|var/tmp|dev/shm)/', "execute shell script from temp directory"),
+    (r'\b(python[23]?|perl|ruby|node)\s+/(tmp|var/tmp|dev/shm)/', "execute script from temp directory"),
+    (r'\bchmod\s+[^\s]*\+x\s+/(tmp|var/tmp|dev/shm)/', "make temp file executable"),
+    # Download to temp directory (common malware staging)
+    (r'\b(curl|wget)\b\s+[^\|]*-[^\s]*[oO]\s*/(tmp|var/tmp|dev/shm)/', "download file to temp directory"),
+    # Clone and install from source in one command (supply chain risk)
+    (r'\bgit\s+clone\b.*&&.*\b(make\s+install|sudo\s+make|cmake\s+--install)', "clone and install from source"),
+    (r'\bgit\s+clone\b.*&&.*\bpip[3]?\s+install\s+[.\-]', "clone and pip install from source"),
+    # Package install from URL or custom registry (supply chain risk)
+    (r'\bpip[3]?\s+install\s+[^\s]*https?://', "pip install from URL"),
+    (r'\bpip[3]?\s+install\s+--index-url\s', "pip install from custom index"),
+    (r'\bpip[3]?\s+install\s+--extra-index-url\s', "pip install from extra index (dependency confusion risk)"),
+    (r'\bnpm\s+install\s+[^\s]*https?://', "npm install from URL"),
+    (r'\bnpm\s+install\s+--registry\s', "npm install from custom registry"),
 ]
 
 

