@@ -660,23 +660,24 @@ class TestTempFileCleanup:
 class TestRequirementsCheck:
     """Test platform requirements detection."""
 
-    @patch("sys.platform", "darwin")
     def test_macos_with_pyautogui(self):
-        with patch.dict("sys.modules", {"pyautogui": MagicMock()}):
+        """Darwin + pyautogui + Quartz available → True."""
+        mock_quartz = MagicMock()
+        with (
+            patch("sys.platform", "darwin"),
+            patch.dict("sys.modules", {
+                "pyautogui": MagicMock(),
+                "Quartz": mock_quartz,
+            }),
+        ):
             from tools.computer_use_tool import check_computer_use_requirements
-            # Re-import to pick up patched platform
-            import importlib
-            import tools.computer_use_tool as mod
-            importlib.reload(mod)
-            assert mod.check_computer_use_requirements() is True
+            assert check_computer_use_requirements() is True
 
-    @patch("sys.platform", "linux")
     def test_linux_rejected(self):
-        from tools.computer_use_tool import check_computer_use_requirements
-        import importlib
-        import tools.computer_use_tool as mod
-        importlib.reload(mod)
-        assert mod.check_computer_use_requirements() is False
+        """Non-darwin platform → False without needing reload."""
+        with patch("sys.platform", "linux"):
+            from tools.computer_use_tool import check_computer_use_requirements
+            assert check_computer_use_requirements() is False
 
 
 class TestStubSchema:
