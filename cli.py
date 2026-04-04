@@ -4210,6 +4210,8 @@ class HermesCLI:
             self._handle_rollback_command(cmd_original)
         elif canonical == "stop":
             self._handle_stop_command()
+        elif canonical == "claude":
+            self._handle_claude_command(cmd_original)
         elif canonical == "background":
             self._handle_background_command(cmd_original)
         elif canonical == "btw":
@@ -4361,6 +4363,32 @@ class HermesCLI:
         else:
             self.console.print("[bold red]Plan mode unavailable: input queue not initialized[/]")
     
+    def _handle_claude_command(self, cmd: str):
+        """Handle /claude <prompt> -- send a task directly to Claude Code CLI."""
+        parts = cmd.strip().split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            _cprint("  Usage: /claude <prompt>")
+            _cprint("  Example: /claude analyze src/main.py and suggest improvements")
+            _cprint("  Sends the prompt to Claude Code CLI using your subscription.")
+            return
+
+        prompt = parts[1].strip()
+        preview = prompt[:60] + ("..." if len(prompt) > 60 else "")
+        _cprint(f'  Claude Code: "{preview}"')
+
+        from tools.claude_code_tool import claude_code
+        result = claude_code(prompt=prompt, timeout=300)
+
+        if result.get("success"):
+            output = result.get("output", "").strip()
+            if output:
+                self.console.print(output)
+            else:
+                _cprint("  Claude Code returned an empty response.")
+        else:
+            error = result.get("error", "Unknown error")
+            _cprint(f"  Claude Code failed: {error}")
+
     def _handle_background_command(self, cmd: str):
         """Handle /background <prompt> — run a prompt in a separate background session.
 

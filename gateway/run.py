@@ -2005,6 +2005,9 @@ class GatewayRunner:
         if canonical == "voice":
             return await self._handle_voice_command(event)
 
+        if canonical == "claude":
+            return await self._handle_claude_command(event)
+
         # User-defined quick commands (bypass agent loop, no LLM call)
         if command:
             if isinstance(self.config, dict):
@@ -3923,6 +3926,57 @@ class GatewayRunner:
                 f"A pre-rollback snapshot was saved automatically."
             )
         return f"❌ {result['error']}"
+
+    async def _handle_claude_command(self, event: MessageEvent) -> str:
+        """Handle /claude <prompt> -- delegate a task to Claude Code CLI.
+
+        Runs ``claude -p "<prompt>"`` using the user's existing Claude
+        subscription (no API key or extra usage credits).  The result is
+        returned directly without going through the agent loop.
+        """
+        prompt = event.get_command_args().strip()
+        if not prompt:
+            return (
+                "Usage: /claude <prompt>\n"
+                "Example: /claude analyze the code in src/main.py and suggest improvements\n\n"
+                "Sends the prompt directly to Claude Code CLI using your subscription."
+            )
+
+        source = event.source
+        adapter = self.adapters.get(source.platform)
+        _thread_metadata = {"thread_id": source.thread_id} if source.thread_id else None
+
+        # Notify user that Claude is working
+        if adapter:
+            try:
+                await adapter.send(
+                    source.chat_id,
+                    "Claude Code is working on your task...",
+                    metadata=_thread_metadata,
+                )
+            except Exception:
+                pass
+
+        # Run claude -p in a thread to avoid blocking the event loop
+        import asyncio
+        from tools.claude_code_tool import claude_code
+
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: claude_code(prompt=prompt, timeout=300),
+            )
+        except Exception as e:
+            return f"Claude Code error: {e}"
+
+        if result.get("success"):
+            output = result.get("output", "").strip()
+            if not output:
+                return "Claude Code returned an empty response."
+            return output
+        else:
+            error = result.get("error", "Unknown error")
+            return f"Claude Code failed: {error}"
 
     async def _handle_background_command(self, event: MessageEvent) -> str:
         """Handle /background <prompt> — run a prompt in a separate background session.
