@@ -93,7 +93,14 @@ def claude_code(
         }
 
     effective_timeout = min(timeout or DEFAULT_TIMEOUT, 600)
-    work_dir = cwd or os.getcwd()
+    work_dir = os.path.realpath(cwd) if cwd else os.getcwd()
+
+    if not os.path.isdir(work_dir):
+        return {
+            "success": False,
+            "output": "",
+            "error": f"Working directory does not exist: {work_dir}",
+        }
 
     cmd = _build_claude_command(prompt, model=model, max_turns=max_turns)
 
@@ -143,22 +150,15 @@ def claude_code(
 # Tool handler (called by model_tools dispatch)
 # ---------------------------------------------------------------------------
 
-def handle_claude_code(
-    prompt: str,
-    model: str = "",
-    max_turns: int = 0,
-    cwd: str = "",
-    timeout: int = 0,
-    **kwargs,
-) -> str:
-    """Tool handler entry point."""
+def _handle_claude_code_dispatch(args: dict, **kwargs) -> str:
+    """Tool handler entry point (called by registry dispatch with args dict)."""
     import json
     result = claude_code(
-        prompt=prompt,
-        model=model or None,
-        max_turns=max_turns or None,
-        cwd=cwd or None,
-        timeout=timeout or None,
+        prompt=args.get("prompt", ""),
+        model=args.get("model", "") or None,
+        max_turns=args.get("max_turns", 0) or None,
+        cwd=args.get("cwd", "") or None,
+        timeout=args.get("timeout", 0) or None,
     )
     return json.dumps(result, ensure_ascii=False)
 
@@ -176,7 +176,7 @@ CLAUDE_CODE_SCHEMA = {
         "Claude runs locally using the user's existing subscription -- no API key needed. "
         "Provide a clear, detailed prompt describing the task."
     ),
-    "input_schema": {
+    "parameters": {
         "type": "object",
         "properties": {
             "prompt": {
@@ -215,7 +215,7 @@ registry.register(
     name=TOOL_NAME,
     toolset=TOOLSET,
     schema=CLAUDE_CODE_SCHEMA,
-    handler=handle_claude_code,
+    handler=_handle_claude_code_dispatch,
     check_fn=check_claude_code_available,
     requires_env=[],
     description="Delegate complex tasks to Claude Code CLI",

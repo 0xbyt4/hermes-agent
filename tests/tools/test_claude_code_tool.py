@@ -8,7 +8,7 @@ import pytest
 
 from tools.claude_code_tool import (
     claude_code,
-    handle_claude_code,
+    _handle_claude_code_dispatch,
     check_claude_code_available,
     _build_claude_command,
     DEFAULT_TIMEOUT,
@@ -122,6 +122,7 @@ class TestClaudeCode:
             assert call_kwargs.kwargs["timeout"] == 600
 
     def test_custom_cwd(self):
+        import os
         mock_result = MagicMock()
         mock_result.stdout = "ok"
         mock_result.stderr = ""
@@ -131,10 +132,17 @@ class TestClaudeCode:
              patch("subprocess.run", return_value=mock_result) as mock_run:
             claude_code(prompt="test", cwd="/tmp")
             call_kwargs = mock_run.call_args
-            assert call_kwargs.kwargs["cwd"] == "/tmp"
+            assert call_kwargs.kwargs["cwd"] == os.path.realpath("/tmp")
 
 
-class TestHandleClaudeCode:
+    def test_invalid_cwd(self):
+        with patch("tools.claude_code_tool.check_claude_code_available", return_value=True):
+            result = claude_code(prompt="test", cwd="/nonexistent/path/xyz")
+            assert result["success"] is False
+            assert "does not exist" in result["error"]
+
+
+class TestDispatchHandler:
     def test_handler_returns_json(self):
         mock_result = MagicMock()
         mock_result.stdout = "result"
@@ -143,15 +151,15 @@ class TestHandleClaudeCode:
 
         with patch("tools.claude_code_tool.check_claude_code_available", return_value=True), \
              patch("subprocess.run", return_value=mock_result):
-            output = handle_claude_code(prompt="test")
+            output = _handle_claude_code_dispatch({"prompt": "test"})
             parsed = json.loads(output)
             assert parsed["success"] is True
             assert parsed["output"] == "result"
 
-    def test_handler_empty_model_becomes_none(self):
+    def test_handler_receives_args_dict(self):
         with patch("tools.claude_code_tool.check_claude_code_available", return_value=True), \
              patch("tools.claude_code_tool.claude_code", return_value={"success": True, "output": "ok"}) as mock_cc:
-            handle_claude_code(prompt="test", model="", max_turns=0, cwd="", timeout=0)
+            _handle_claude_code_dispatch({"prompt": "test", "model": "", "max_turns": 0, "cwd": "", "timeout": 0})
             mock_cc.assert_called_once_with(
                 prompt="test", model=None, max_turns=None, cwd=None, timeout=None,
             )
