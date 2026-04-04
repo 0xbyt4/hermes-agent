@@ -390,12 +390,13 @@ def claude_code_streaming(
 # ---------------------------------------------------------------------------
 
 def _handle_claude_code_dispatch(args: dict, **kwargs) -> str:
-    """Tool handler entry point (called by registry dispatch with args dict)."""
-    # Try to get hermes session key from parent agent context
-    session_key = None
-    parent_agent = kwargs.get("parent_agent") or kwargs.get("agent")
-    if parent_agent:
-        session_key = getattr(parent_agent, "session_id", None) or getattr(parent_agent, "task_id", None)
+    """Tool handler entry point (called by registry dispatch with args dict).
+
+    Registry passes ``task_id`` and ``user_task`` as kwargs (see model_tools.py).
+    We use ``task_id`` as the session key so Claude sessions are scoped to
+    the Hermes session/task.
+    """
+    session_key = kwargs.get("task_id")
 
     result = claude_code(
         prompt=args.get("prompt", ""),
@@ -415,12 +416,15 @@ def _handle_claude_code_dispatch(args: dict, **kwargs) -> str:
 CLAUDE_CODE_SCHEMA = {
     "name": TOOL_NAME,
     "description": (
-        "Delegate a complex task to Claude Code (Anthropic's coding agent). "
-        "Use this for tasks that require deep code analysis, multi-file refactoring, "
-        "architecture review, debugging complex issues, or writing substantial code. "
-        "Claude runs locally using the user's existing subscription -- no API key needed. "
-        "Sessions are preserved: Claude remembers context from previous calls in this session. "
-        "Provide a clear, detailed prompt describing the task."
+        "Delegate a task to Claude Code (Anthropic's coding agent). "
+        "ONLY use this tool when the user explicitly asks to use Claude, "
+        "or when a task clearly requires capabilities you lack (e.g. multi-file "
+        "refactoring across 5+ files, complex architecture redesign, or debugging "
+        "issues you failed to solve after 2+ attempts). "
+        "Do NOT use this for simple questions, single-file edits, or tasks you can handle. "
+        "Claude runs locally using the user's existing subscription. "
+        "Sessions are preserved across calls. "
+        "Provide a clear, detailed prompt with file paths and context."
     ),
     "parameters": {
         "type": "object",
