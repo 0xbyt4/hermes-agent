@@ -3931,22 +3931,22 @@ class GatewayRunner:
         """Handle /claude <prompt> -- delegate a task to Claude Code CLI.
 
         Runs ``claude -p "<prompt>"`` using the user's existing Claude
-        subscription (no API key or extra usage credits).  The result is
-        returned directly without going through the agent loop.
+        subscription (no API key or extra usage credits).  Sessions are
+        preserved per chat so Claude remembers context across calls.
         """
         prompt = event.get_command_args().strip()
         if not prompt:
             return (
                 "Usage: /claude <prompt>\n"
                 "Example: /claude analyze the code in src/main.py and suggest improvements\n\n"
-                "Sends the prompt directly to Claude Code CLI using your subscription."
+                "Sends the prompt directly to Claude Code CLI using your subscription.\n"
+                "Session is preserved -- Claude remembers previous /claude calls."
             )
 
         source = event.source
         adapter = self.adapters.get(source.platform)
         _thread_metadata = {"thread_id": source.thread_id} if source.thread_id else None
 
-        # Notify user that Claude is working
         if adapter:
             try:
                 await adapter.send(
@@ -3957,14 +3957,15 @@ class GatewayRunner:
             except Exception:
                 pass
 
-        # Run claude -p in a thread to avoid blocking the event loop
         import asyncio
         from tools.claude_code_tool import claude_code
+
+        session_key = self._session_key_for_source(source)
 
         try:
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: claude_code(prompt=prompt, timeout=300),
+                lambda: claude_code(prompt=prompt, timeout=300, session_key=session_key),
             )
         except Exception as e:
             return f"Claude Code error: {e}"
@@ -3973,6 +3974,9 @@ class GatewayRunner:
             output = result.get("output", "").strip()
             if not output:
                 return "Claude Code returned an empty response."
+            cost = result.get("cost_usd")
+            if cost is not None:
+                output += f"\n\n[${cost:.4f}]"
             return output
         else:
             error = result.get("error", "Unknown error")
