@@ -7310,31 +7310,54 @@ def _deliver_dream(result: dict, adapters: dict, loop, gateway_config=None) -> N
 
     message = "\n".join(lines)
 
-    # Find an adapter with a configured home channel
+    # Try home channel first, fall back to last active chat
+    import asyncio
+
     for platform, adapter in adapters.items():
         if not hasattr(adapter, "send") or not hasattr(adapter, "_running"):
             continue
         if not adapter._running:
             continue
 
-        # Look up home channel from gateway config
-        home_channel = None
+        # Try home channel from gateway config
+        chat_id = None
         if gateway_config and hasattr(gateway_config, "get_home_channel"):
             home_channel = gateway_config.get_home_channel(platform)
+            if home_channel:
+                chat_id = home_channel.chat_id
 
-        if home_channel:
+        # Fall back to last active session's chat_id
+        if not chat_id and hasattr(adapter, "_active_sessions"):
+            for session_key in adapter._active_sessions:
+                parts = session_key.split(":")
+                if len(parts) >= 4:
+                    chat_id = parts[3]
+                    break
+
+        # Fall back to channel directory JSON (last known chats per platform)
+        if not chat_id:
             try:
-                import asyncio
+                import json as _json
+                _dir_path = Path(os.getenv("HERMES_HOME", Path.home() / ".hermes")) / "channel_directory.json"
+                if _dir_path.exists():
+                    _dir_data = _json.loads(_dir_path.read_text(encoding="utf-8"))
+                    _plat_channels = _dir_data.get("platforms", {}).get(platform.value, [])
+                    if _plat_channels:
+                        chat_id = str(_plat_channels[0].get("id", ""))
+            except Exception:
+                pass
 
+        if chat_id:
+            try:
                 asyncio.run_coroutine_threadsafe(
-                    adapter.send(chat_id=home_channel.chat_id, content=message), loop
+                    adapter.send(chat_id=chat_id, content=message), loop
                 )
-                logger.info("Dream delivered to %s (%s)", type(adapter).__name__, home_channel.chat_id)
+                logger.info("Dream delivered to %s (chat=%s)", type(adapter).__name__, chat_id)
                 return
             except Exception as e:
-                logger.debug("Dream delivery failed for %s: %s", type(adapter).__name__, e)
+                logger.warning("Dream delivery failed for %s: %s", type(adapter).__name__, e)
 
-    logger.debug("Dream: no adapter with home channel found for delivery")
+    logger.info("Dream: no suitable chat found for delivery")
 
 
 async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = False, verbosity: Optional[int] = 0) -> bool:
