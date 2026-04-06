@@ -556,10 +556,24 @@ class DreamEngine:
                 import anthropic
                 client = anthropic.Anthropic(api_key=api_key)
 
+            # Use system prompt with cache_control to benefit from prompt
+            # caching — without this, OAuth tokens hit rate limits much faster.
             response = client.messages.create(
                 model=model,
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}],
+                max_tokens=8000,
+                system=[{
+                    "type": "text",
+                    "text": "You are a dream processing engine for an AI agent.",
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                messages=[{
+                    "role": "user",
+                    "content": [{
+                        "type": "text",
+                        "text": prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    }],
+                }],
             )
             return response.content[0].text if response.content else None
 
