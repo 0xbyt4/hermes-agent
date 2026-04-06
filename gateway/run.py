@@ -7151,6 +7151,130 @@ def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, in
     logger.info("Cron ticker stopped")
 
 
+def _start_dream_ticker(stop_event: threading.Event, adapters=None, loop=None):
+    """
+    Background thread that checks for idle sessions and triggers dream processing.
+
+    Runs every 60 seconds.  When the agent has been idle for longer than the
+    configured ``dream.idle_minutes`` threshold AND there are unprocessed
+    sessions, it spawns a dream cycle.
+
+    Dream results can optionally be delivered to the user via the configured
+    platform adapter.
+    """
+    import time
+
+    try:
+        from tools.dream_engine import DreamEngine, load_dream_config
+    except ImportError:
+        logger.debug("Dream engine not available, dream ticker disabled")
+        return
+
+    config = load_dream_config()
+    if not config.get("enabled", False):
+        logger.debug("Dream disabled in config, dream ticker not started")
+        return
+
+    idle_minutes = int(config.get("idle_minutes", 30))
+    idle_seconds = idle_minutes * 60
+    _last_activity = time.time()
+    _dream_running = False
+
+    logger.info("Dream ticker started (idle_threshold=%dm)", idle_minutes)
+
+    while not stop_event.is_set():
+        try:
+            # Check if any adapter has active sessions
+            has_active = False
+            if adapters:
+                for adapter in adapters.values():
+                    if hasattr(adapter, "_active_sessions") and adapter._active_sessions:
+                        has_active = True
+                        _last_activity = time.time()
+                        break
+
+            idle_duration = time.time() - _last_activity
+
+            if idle_duration >= idle_seconds and not _dream_running:
+                _dream_running = True
+                logger.info(
+                    "Dream: idle for %.0f minutes, starting dream cycle",
+                    idle_duration / 60,
+                )
+                try:
+                    # Reload config each cycle in case user changed it
+                    fresh_config = load_dream_config()
+                    if not fresh_config.get("enabled", False):
+                        _dream_running = False
+                        stop_event.wait(timeout=60)
+                        continue
+
+                    engine = DreamEngine(fresh_config)
+                    result = engine.run()
+
+                    if result and fresh_config.get("deliver", True) and adapters and loop:
+                        _deliver_dream(result, adapters, loop)
+
+                except Exception as e:
+                    logger.error("Dream cycle failed: %s", e)
+                finally:
+                    _dream_running = False
+                    # After a dream, reset activity timer to avoid back-to-back dreams
+                    _last_activity = time.time()
+
+        except Exception as e:
+            logger.debug("Dream tick error: %s", e)
+
+        stop_event.wait(timeout=60)
+
+    logger.info("Dream ticker stopped")
+
+
+def _deliver_dream(result: dict, adapters: dict, loop) -> None:
+    """Deliver dream summary to the most recently active platform adapter."""
+    narrative = result.get("dream_narrative", "")
+    summary = result.get("session_summary", "")
+    patterns = result.get("patterns", [])
+
+    if not narrative and not summary:
+        return
+
+    lines = []
+    if summary:
+        lines.append(f"**Dream Summary:** {summary}")
+    if patterns:
+        lines.append("")
+        lines.append("**Patterns:**")
+        for p in patterns:
+            lines.append(f"- {p}")
+    if narrative:
+        lines.append("")
+        lines.append(f"**Dream:**\n{narrative}")
+
+    message = "\n".join(lines)
+
+    # Find the best adapter to deliver to (prefer the one with a home channel)
+    for adapter in adapters.values():
+        if not hasattr(adapter, "send") or not hasattr(adapter, "_running"):
+            continue
+        if not adapter._running:
+            continue
+        home = getattr(adapter, "_home_channel_id", None)
+        if home:
+            try:
+                import asyncio
+
+                asyncio.run_coroutine_threadsafe(
+                    adapter.send(chat_id=home, content=message), loop
+                )
+                logger.info("Dream delivered to %s", type(adapter).__name__)
+                return
+            except Exception as e:
+                logger.debug("Dream delivery failed for %s: %s", type(adapter).__name__, e)
+
+    logger.debug("Dream: no suitable adapter found for delivery")
+
+
 async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = False, verbosity: Optional[int] = 0) -> bool:
     """
     Start the gateway and run until interrupted.
@@ -7312,7 +7436,18 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         name="cron-ticker",
     )
     cron_thread.start()
-    
+
+    # Start background dream ticker for idle-time memory processing.
+    dream_stop = threading.Event()
+    dream_thread = threading.Thread(
+        target=_start_dream_ticker,
+        args=(dream_stop,),
+        kwargs={"adapters": runner.adapters, "loop": asyncio.get_running_loop()},
+        daemon=True,
+        name="dream-ticker",
+    )
+    dream_thread.start()
+
     # Wait for shutdown
     await runner.wait_for_shutdown()
 
@@ -7321,9 +7456,11 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
             logger.error("Gateway exiting with failure: %s", runner.exit_reason)
         return False
     
-    # Stop cron ticker cleanly
+    # Stop cron and dream tickers cleanly
     cron_stop.set()
+    dream_stop.set()
     cron_thread.join(timeout=5)
+    dream_thread.join(timeout=5)
 
     # Close MCP server connections
     try:
