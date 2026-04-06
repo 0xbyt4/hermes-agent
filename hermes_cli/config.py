@@ -537,6 +537,22 @@ DEFAULT_CONFIG = {
         "wrap_response": True,
     },
 
+    # Dream — idle-time memory processing inspired by human sleep stages.
+    # Agent processes recent sessions during idle periods, consolidating
+    # knowledge, finding patterns, and making creative connections.
+    "dream": {
+        "enabled": False,
+        "model": "claude-haiku-4-5-20251001",      # Cheap model for analysis (stages 2+3)
+        "creative_model": "",                        # Strong model for creative (stage 4), empty = use model
+        "provider": "",                              # Provider for dream LLM calls, empty = use main provider
+        "base_url": "",                              # Custom endpoint
+        "api_key": "",                               # API key, empty = use env var
+        "idle_minutes": 30,                          # Minutes of inactivity before dreaming
+        "sessions_to_process": 4,                    # Number of recent sessions per dream
+        "max_messages_per_session": 50,              # Max user messages to read per session
+        "deliver": True,                             # Send dream summary to user
+    },
+
     # Logging — controls file logging to ~/.hermes/logs/.
     # agent.log captures INFO+ (all agent activity); errors.log captures WARNING+.
     "logging": {
