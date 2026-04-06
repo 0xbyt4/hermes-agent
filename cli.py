@@ -3060,6 +3060,71 @@ class HermesCLI:
         print(f"  Home:    {display}")
         print()
 
+    def _handle_dream_command(self, cmd_original: str):
+        """Handle /dream command in CLI chat.
+
+        /dream          — trigger a dream cycle
+        /dream status   — show dream state
+        /dream history  — list recent dreams
+        """
+        parts = cmd_original.strip().split(None, 1)
+        args = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        try:
+            from tools.dream_engine import DreamEngine, load_dream_config
+            config = load_dream_config()
+            engine = DreamEngine(config)
+        except ImportError:
+            _cprint("Dream engine not available.")
+            return
+
+        if args == "status":
+            status = engine.get_status()
+            print()
+            _cprint(f"  Dream: {'enabled' if status['enabled'] else 'disabled'}")
+            _cprint(f"  Model: {status['model']}")
+            _cprint(f"  Creative model: {status['creative_model']}")
+            _cprint(f"  Idle threshold: {status['idle_minutes']}m")
+            _cprint(f"  Sessions per dream: {status['sessions_to_process']}")
+            _cprint(f"  Total dreams: {status['dream_count']}")
+            _cprint(f"  Last dream: {status['last_dream_at'] or 'never'}")
+            print()
+            return
+
+        if args == "history":
+            dreams = engine.list_dreams(limit=10)
+            if not dreams:
+                _cprint("  No dream logs yet.")
+                return
+            print()
+            for d in dreams:
+                _cprint(f"  {d['date']}  {d['preview'][:70] or '(no preview)'}")
+            print()
+            return
+
+        # Default: run dream
+        if not config.get("enabled", False):
+            _cprint("  Dream is disabled. Enable in config.yaml: dream: {enabled: true}")
+            return
+
+        _cprint("  Starting dream cycle...")
+        result = engine.run()
+        if result is None:
+            _cprint("  No new sessions to process since last dream.")
+            return
+
+        print()
+        _cprint(f"  Sessions processed: {result['sessions_processed']}")
+        _cprint(f"  Memory updates: {result['memory_updates_applied']}")
+        if result.get('patterns'):
+            _cprint("  Patterns:")
+            for p in result['patterns']:
+                _cprint(f"    - {p}")
+        if result.get('dream_narrative'):
+            print()
+            _cprint(result['dream_narrative'][:800])
+        print()
+
     def show_config(self):
         """Display current configuration with kawaii ASCII art."""
         # Get terminal config from environment (which was set from cli-config.yaml)
@@ -4375,6 +4440,8 @@ class HermesCLI:
             self.save_conversation()
         elif canonical == "cron":
             self._handle_cron_command(cmd_original)
+        elif canonical == "dream":
+            self._handle_dream_command(cmd_original)
         elif canonical == "skills":
             with self._busy_command(self._slow_command_status(cmd_original)):
                 self._handle_skills_command(cmd_original)
