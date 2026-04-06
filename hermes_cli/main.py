@@ -5371,7 +5371,6 @@ For more help on a command:
     acp_parser.set_defaults(func=cmd_acp)
 
     # =========================================================================
-<<<<<<< HEAD
     # profile command
     # =========================================================================
     profile_parser = subparsers.add_parser(
