@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -617,6 +618,9 @@ class DreamEngine:
             len(analysis.get("patterns", [])),
             len(analysis.get("open_threads", [])),
         )
+
+        # Brief pause between LLM calls to avoid rate limit contention
+        time.sleep(5)
 
         # Stage 4: IMAGINE
         creative_prompt = self.build_creative_prompt(analysis, memory_content)
