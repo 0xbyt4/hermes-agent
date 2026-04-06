@@ -3115,14 +3115,19 @@ class HermesCLI:
 
         print()
         _cprint(f"  Sessions processed: {result['sessions_processed']}")
-        _cprint(f"  Patterns: {len(result.get('patterns', []))}")
+        if result.get('session_summary'):
+            _cprint(f"  Summary: {result['session_summary']}")
         if result.get('patterns'):
             _cprint("  Patterns:")
             for p in result['patterns']:
                 _cprint(f"    - {p}")
+        if result.get('open_threads'):
+            _cprint("  Open threads:")
+            for t in result['open_threads']:
+                _cprint(f"    - {t}")
         if result.get('dream_narrative'):
             print()
-            _cprint(result['dream_narrative'][:800])
+            _cprint(result['dream_narrative'][:1200])
         print()
 
     def show_config(self):

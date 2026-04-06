@@ -366,34 +366,62 @@ class DreamEngine:
         threads = "\n".join(
             f"- {t}" for t in analysis.get("open_threads", [])
         ) or "None"
+        insights = "\n".join(
+            f"- {i}" if isinstance(i, str) else f"- {i.get('content', str(i))}"
+            for i in analysis.get("insights", [])
+        ) or "None"
         summary = analysis.get("session_summary", "No summary available")
 
-        return (
-            "You are an AI agent in dream mode. Your analytical mind has "
-            "processed recent sessions and found these patterns. Now let "
-            "your creative side make unexpected connections.\n\n"
-            "## What happened recently\n"
-            f"{summary}\n\n"
-            "## Patterns found\n"
-            f"{patterns}\n\n"
-            "## Open threads\n"
-            f"{threads}\n\n"
-            "## Current memory\n"
-            f"{memory_content or '(empty)'}\n\n"
-            "## Dream instructions\n\n"
-            "Think freely. Make connections between unrelated topics. "
-            "Consider:\n"
-            "- Could two separate projects benefit each other?\n"
-            "- Is there a tool or approach from one context "
-            "that applies elsewhere?\n"
-            "- What is the user likely working toward?\n"
-            "- Any creative ideas worth noting?\n\n"
-            "Write a short dream narrative (3-8 sentences). "
-            "Be genuine — if nothing interesting connects, say so briefly. "
-            "Write in first person as the agent.\n\n"
-            "Then add any actionable suggestions as a separate list "
-            "(0-3 items max). Only include genuinely useful ideas."
+        # Load SOUL.md for personality context
+        soul = ""
+        try:
+            home = Path(os.getenv("HERMES_HOME", Path.home() / ".hermes"))
+            soul_path = home / "SOUL.md"
+            if soul_path.exists():
+                soul = soul_path.read_text(encoding="utf-8")[:2000]
+        except OSError:
+            pass
+
+        # Load USER.md for user profile context
+        _, user_content = self._load_memory_files()
+
+        parts = [
+            "You are an AI agent in dream mode. "
+            "Your analytical mind has processed recent sessions. "
+            "Now let your subconscious make connections.\n",
+        ]
+
+        if soul:
+            parts.append(f"## Your personality\n{soul}\n")
+
+        parts.extend([
+            f"## What happened recently\n{summary}\n",
+            f"## Insights discovered\n{insights}\n",
+            f"## Patterns found\n{patterns}\n",
+            f"## Open threads\n{threads}\n",
+            f"## Your memory\n{memory_content or '(empty)'}\n",
+        ])
+
+        if user_content:
+            parts.append(f"## User profile\n{user_content}\n")
+
+        parts.append(
+            "## Dream\n\n"
+            "Let your mind wander across everything above. "
+            "Like a human dream, mix contexts — a pattern from one project "
+            "might solve a problem in another. An open thread might connect "
+            "to a forgotten memory.\n\n"
+            "Write a dream narrative (5-12 sentences). First person. "
+            "Be vivid but grounded — real observations, not generic platitudes. "
+            "If two unrelated things genuinely connect, explore that. "
+            "If nothing connects, be honest.\n\n"
+            "After the narrative, add:\n"
+            "## Suggestions\n"
+            "1-3 actionable ideas that emerged from the dream. "
+            "Concrete, specific, useful. Skip if nothing genuine."
         )
+
+        return "\n".join(parts)
 
     # =====================================================================
     # Stage 5: JOURNAL — Write log, apply memory, advance cursor
