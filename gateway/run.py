@@ -1890,6 +1890,8 @@ class GatewayRunner:
         if _quick_key in self._running_agents:
             if event.get_command() == "status":
                 return await self._handle_status_command(event)
+            if event.get_command() == "dream":
+                return await self._handle_dream_command(event)
 
             # Resolve the command once for all early-intercept checks below.
             from hermes_cli.commands import resolve_command as _resolve_cmd_inner
@@ -3388,26 +3390,13 @@ class GatewayRunner:
         if not config.get("enabled", False):
             return "Dream is disabled. Enable in config.yaml: `dream: {enabled: true}`"
 
-        result = engine.run()
+        result = await asyncio.to_thread(engine.run)
         if result is None:
             return "No new sessions to process since last dream."
 
-        lines = [
-            "**Dream Complete**",
-            "",
-            f"Sessions processed: {result['sessions_processed']}",
-            f"Patterns: {len(result.get('patterns', []))}",
-        ]
-        if result.get("patterns"):
-            lines.append("")
-            lines.append("**Patterns:**")
-            for p in result["patterns"]:
-                lines.append(f"- {p}")
         if result.get("dream_narrative"):
-            lines.append("")
-            lines.append(f"**Dream:**\n{result['dream_narrative'][:500]}")
-
-        return "\n".join(lines)
+            return result["dream_narrative"]
+        return f"Dream complete. Sessions processed: {result['sessions_processed']}"
 
     async def _handle_stop_command(self, event: MessageEvent) -> str:
         """Handle /stop command - interrupt a running agent.
@@ -7219,7 +7208,7 @@ def _start_cron_ticker(stop_event: threading.Event, adapters=None, loop=None, in
     logger.info("Cron ticker stopped")
 
 
-def _start_dream_ticker(stop_event: threading.Event, adapters=None, loop=None):
+def _start_dream_ticker(stop_event: threading.Event, adapters=None, loop=None, gateway_config=None):
     """
     Background thread that checks for idle sessions and triggers dream processing.
 
@@ -7281,7 +7270,7 @@ def _start_dream_ticker(stop_event: threading.Event, adapters=None, loop=None):
                     result = engine.run()
 
                     if result and fresh_config.get("deliver", True) and adapters and loop:
-                        _deliver_dream(result, adapters, loop)
+                        _deliver_dream(result, adapters, loop, gateway_config)
 
                 except Exception as e:
                     logger.error("Dream cycle failed: %s", e)
@@ -7298,8 +7287,8 @@ def _start_dream_ticker(stop_event: threading.Event, adapters=None, loop=None):
     logger.info("Dream ticker stopped")
 
 
-def _deliver_dream(result: dict, adapters: dict, loop) -> None:
-    """Deliver dream summary to the most recently active platform adapter."""
+def _deliver_dream(result: dict, adapters: dict, loop, gateway_config=None) -> None:
+    """Deliver dream summary to the first platform with a configured home channel."""
     narrative = result.get("dream_narrative", "")
     summary = result.get("session_summary", "")
     patterns = result.get("patterns", [])
@@ -7321,26 +7310,31 @@ def _deliver_dream(result: dict, adapters: dict, loop) -> None:
 
     message = "\n".join(lines)
 
-    # Find the best adapter to deliver to (prefer the one with a home channel)
-    for adapter in adapters.values():
+    # Find an adapter with a configured home channel
+    for platform, adapter in adapters.items():
         if not hasattr(adapter, "send") or not hasattr(adapter, "_running"):
             continue
         if not adapter._running:
             continue
-        home = getattr(adapter, "_home_channel_id", None)
-        if home:
+
+        # Look up home channel from gateway config
+        home_channel = None
+        if gateway_config and hasattr(gateway_config, "get_home_channel"):
+            home_channel = gateway_config.get_home_channel(platform)
+
+        if home_channel:
             try:
                 import asyncio
 
                 asyncio.run_coroutine_threadsafe(
-                    adapter.send(chat_id=home, content=message), loop
+                    adapter.send(chat_id=home_channel.chat_id, content=message), loop
                 )
-                logger.info("Dream delivered to %s", type(adapter).__name__)
+                logger.info("Dream delivered to %s (%s)", type(adapter).__name__, home_channel.chat_id)
                 return
             except Exception as e:
                 logger.debug("Dream delivery failed for %s: %s", type(adapter).__name__, e)
 
-    logger.debug("Dream: no suitable adapter found for delivery")
+    logger.debug("Dream: no adapter with home channel found for delivery")
 
 
 async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = False, verbosity: Optional[int] = 0) -> bool:
@@ -7510,7 +7504,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     dream_thread = threading.Thread(
         target=_start_dream_ticker,
         args=(dream_stop,),
-        kwargs={"adapters": runner.adapters, "loop": asyncio.get_running_loop()},
+        kwargs={"adapters": runner.adapters, "loop": asyncio.get_running_loop(), "gateway_config": runner.config},
         daemon=True,
         name="dream-ticker",
     )
@@ -7519,16 +7513,16 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # Wait for shutdown
     await runner.wait_for_shutdown()
 
-    if runner.should_exit_with_failure:
-        if runner.exit_reason:
-            logger.error("Gateway exiting with failure: %s", runner.exit_reason)
-        return False
-    
-    # Stop cron and dream tickers cleanly
+    # Stop cron and dream tickers cleanly (always, even on failure)
     cron_stop.set()
     dream_stop.set()
     cron_thread.join(timeout=5)
     dream_thread.join(timeout=5)
+
+    if runner.should_exit_with_failure:
+        if runner.exit_reason:
+            logger.error("Gateway exiting with failure: %s", runner.exit_reason)
+        return False
 
     # Close MCP server connections
     try:

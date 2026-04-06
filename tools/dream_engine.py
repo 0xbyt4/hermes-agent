@@ -411,14 +411,12 @@ class DreamEngine:
             "Like a human dream, mix contexts — a pattern from one project "
             "might solve a problem in another. An open thread might connect "
             "to a forgotten memory.\n\n"
-            "Write a dream narrative (5-12 sentences). First person. "
+            "Write only a dream narrative (5-12 sentences). First person. "
             "Be vivid but grounded — real observations, not generic platitudes. "
             "If two unrelated things genuinely connect, explore that. "
             "If nothing connects, be honest.\n\n"
-            "After the narrative, add:\n"
-            "## Suggestions\n"
-            "1-3 actionable ideas that emerged from the dream. "
-            "Concrete, specific, useful. Skip if nothing genuine."
+            "Do not add suggestions, recommendations, or action items. "
+            "Just the dream."
         )
 
         return "\n".join(parts)
@@ -535,9 +533,8 @@ class DreamEngine:
             return None
 
         logger.info(
-            "Dream LLM call: provider=%s model=%s token=%s... base_url=%r prompt_len=%d",
-            provider, model, api_key[:20] if api_key else "NONE",
-            base_url, len(prompt),
+            "Dream LLM call: provider=%s model=%s prompt_len=%d",
+            provider, model, len(prompt),
         )
 
         try:
@@ -648,7 +645,33 @@ class DreamEngine:
         """Run the complete 5-stage dream pipeline.
 
         Returns a result dict on success, None if nothing to process.
+        Uses a file lock to prevent concurrent dream runs.
         """
+        lock_path = get_dream_dir() / ".dream.lock"
+        try:
+            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_WRONLY)
+            import fcntl
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, IOError):
+            logger.info("Dream: another dream cycle is already running")
+            return None
+        except ImportError:
+            # fcntl not available on Windows — skip locking
+            lock_fd = None
+
+        try:
+            return self._run_pipeline()
+        finally:
+            if lock_fd is not None:
+                try:
+                    import fcntl
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    os.close(lock_fd)
+                except (OSError, IOError):
+                    pass
+
+    def _run_pipeline(self) -> Optional[Dict[str, Any]]:
+        """Internal pipeline execution (called with lock held)."""
         # Stage 1: HARVEST
         digests = self.harvest()
         if not digests:
@@ -665,11 +688,10 @@ class DreamEngine:
             digests, memory_content, user_content
         )
         analysis_response = self.make_llm_call(analysis_prompt, model=self.model)
-        analysis = (
-            self.parse_analysis_response(analysis_response)
-            if analysis_response
-            else self._empty_analysis()
-        )
+        if not analysis_response:
+            logger.warning("Dream: analysis LLM call failed, skipping cycle (cursor not advanced)")
+            return None
+        analysis = self.parse_analysis_response(analysis_response)
 
         logger.info(
             "Dream analysis: %d insights, %d patterns, %d threads",

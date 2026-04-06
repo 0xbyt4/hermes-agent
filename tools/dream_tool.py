@@ -13,6 +13,7 @@ Actions:
 
 import json
 import logging
+import os
 
 from tools.registry import registry
 
@@ -98,7 +99,7 @@ def dream_tool(action: str, path: str = "", limit: int = 5) -> str:
             # Only allow reading from dream directory
             from tools.dream_engine import get_dream_dir
             dream_dir = get_dream_dir()
-            if not str(log.resolve()).startswith(str(dream_dir.resolve())):
+            if not str(log.resolve()).startswith(str(dream_dir.resolve()) + os.sep):
                 return json.dumps({"error": "Access denied: not a dream log"})
             content = log.read_text(encoding="utf-8")
             return json.dumps({"path": str(log), "content": content})
