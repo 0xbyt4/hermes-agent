@@ -2057,6 +2057,9 @@ class GatewayRunner:
         if canonical == "yolo":
             return await self._handle_yolo_command(event)
 
+        if canonical == "dream":
+            return await self._handle_dream_command(event)
+
         if canonical == "model":
             return await self._handle_model_command(event)
 
@@ -3341,6 +3344,71 @@ class GatewayRunner:
         
         return "\n".join(lines)
     
+    async def _handle_dream_command(self, event: MessageEvent) -> str:
+        """Handle /dream command — trigger, status, or history.
+
+        /dream          — trigger a dream cycle
+        /dream status   — show dream state
+        /dream history  — list recent dreams
+        """
+        args = event.get_command_args().strip().lower() if hasattr(event, "get_command_args") else ""
+
+        try:
+            from tools.dream_engine import DreamEngine, load_dream_config
+            config = load_dream_config()
+            engine = DreamEngine(config)
+        except ImportError:
+            return "Dream engine not available."
+
+        if args == "status":
+            status = engine.get_status()
+            lines = [
+                "**Dream Status**",
+                "",
+                f"Enabled: {status['enabled']}",
+                f"Model: {status['model']}",
+                f"Creative model: {status['creative_model']}",
+                f"Idle threshold: {status['idle_minutes']}m",
+                f"Sessions per dream: {status['sessions_to_process']}",
+                f"Total dreams: {status['dream_count']}",
+                f"Last dream: {status['last_dream_at'] or 'never'}",
+            ]
+            return "\n".join(lines)
+
+        if args == "history":
+            dreams = engine.list_dreams(limit=5)
+            if not dreams:
+                return "No dream logs yet."
+            lines = ["**Recent Dreams**", ""]
+            for d in dreams:
+                lines.append(f"- {d['date']}: {d['preview'][:80] or '(no preview)'}")
+            return "\n".join(lines)
+
+        # Default: trigger a dream
+        if not config.get("enabled", False):
+            return "Dream is disabled. Enable in config.yaml: `dream: {enabled: true}`"
+
+        result = engine.run()
+        if result is None:
+            return "No new sessions to process since last dream."
+
+        lines = [
+            "**Dream Complete**",
+            "",
+            f"Sessions processed: {result['sessions_processed']}",
+            f"Memory updates: {result['memory_updates_applied']}",
+        ]
+        if result.get("patterns"):
+            lines.append("")
+            lines.append("**Patterns:**")
+            for p in result["patterns"]:
+                lines.append(f"- {p}")
+        if result.get("dream_narrative"):
+            lines.append("")
+            lines.append(f"**Dream:**\n{result['dream_narrative'][:500]}")
+
+        return "\n".join(lines)
+
     async def _handle_stop_command(self, event: MessageEvent) -> str:
         """Handle /stop command - interrupt a running agent.
 

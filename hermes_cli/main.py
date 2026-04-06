@@ -5486,6 +5486,100 @@ Examples:
     logs_parser.set_defaults(func=cmd_logs)
 
     # =========================================================================
+    # dream command
+    # =========================================================================
+    dream_parser = subparsers.add_parser(
+        "dream",
+        help="Dream processing — idle-time memory consolidation",
+        description="Trigger, inspect, or configure agent dream cycles",
+    )
+    dream_sub = dream_parser.add_subparsers(dest="dream_action")
+
+    dream_sub.add_parser("run", help="Trigger a dream cycle now")
+    dream_sub.add_parser("status", help="Show dream state and config")
+    dream_history_p = dream_sub.add_parser("history", help="List recent dream logs")
+    dream_history_p.add_argument(
+        "-n", "--limit", type=int, default=10,
+        help="Number of dreams to list (default: 10)",
+    )
+    dream_read_p = dream_sub.add_parser("read", help="Read a dream log")
+    dream_read_p.add_argument(
+        "dream_file", nargs="?", default=None,
+        help="Dream log filename or path (default: latest)",
+    )
+
+    def cmd_dream(args):
+        from tools.dream_engine import DreamEngine, load_dream_config, get_dream_dir
+
+        config = load_dream_config()
+        engine = DreamEngine(config)
+        action = getattr(args, "dream_action", None) or "status"
+
+        if action == "run":
+            if not config.get("enabled", False):
+                print("Dream is disabled.")
+                print("Enable: set dream.enabled: true in ~/.hermes/config.yaml")
+                return
+            print("Starting dream cycle...")
+            result = engine.run()
+            if result is None:
+                print("No new sessions to process since last dream.")
+                return
+            print(f"Dream complete!")
+            print(f"  Sessions: {result['sessions_processed']}")
+            print(f"  Memory updates: {result['memory_updates_applied']}")
+            print(f"  Log: {result['log_path']}")
+            if result.get("patterns"):
+                print("  Patterns:")
+                for p in result["patterns"]:
+                    print(f"    - {p}")
+            if result.get("dream_narrative"):
+                print(f"\n{result['dream_narrative'][:800]}")
+
+        elif action == "history":
+            limit = getattr(args, "limit", 10)
+            dreams = engine.list_dreams(limit=limit)
+            if not dreams:
+                print("No dream logs yet.")
+                return
+            for d in dreams:
+                print(f"  {d['date']}  {d['preview'][:70] or '(no preview)'}")
+                print(f"             {d['path']}")
+
+        elif action == "read":
+            dream_file = getattr(args, "dream_file", None)
+            if dream_file:
+                from pathlib import Path
+                p = Path(dream_file)
+                if not p.exists():
+                    p = get_dream_dir() / dream_file
+                if not p.exists():
+                    print(f"Dream log not found: {dream_file}")
+                    return
+                print(p.read_text(encoding="utf-8"))
+            else:
+                dreams = engine.list_dreams(limit=1)
+                if not dreams:
+                    print("No dream logs yet.")
+                    return
+                from pathlib import Path
+                print(Path(dreams[0]["path"]).read_text(encoding="utf-8"))
+
+        else:  # status
+            status = engine.get_status()
+            print(f"Dream: {'enabled' if status['enabled'] else 'disabled'}")
+            print(f"  Model: {status['model']}")
+            print(f"  Creative model: {status['creative_model']}")
+            print(f"  Idle threshold: {status['idle_minutes']}m")
+            print(f"  Sessions per dream: {status['sessions_to_process']}")
+            print(f"  Total dreams: {status['dream_count']}")
+            print(f"  Last dream: {status['last_dream_at'] or 'never'}")
+            if status.get("latest_log"):
+                print(f"  Latest log: {status['latest_log']}")
+
+    dream_parser.set_defaults(func=cmd_dream)
+
+    # =========================================================================
     # Parse and execute
     # =========================================================================
     # Pre-process argv so unquoted multi-word session names after -c / -r
