@@ -108,7 +108,7 @@ Each dream log contains:
 - **Summary** — What happened across processed sessions
 - **Patterns** — Cross-session themes and behaviors
 - **Open Threads** — Unfinished tasks or ongoing work
-- **Memory Updates** — What was added/updated in memory
+- **Insights** — New observations and knowledge discovered
 - **Dream** — Creative narrative and suggestions
 
 ## How Sessions Are Processed
@@ -130,16 +130,14 @@ This means:
 - Only recent sessions are analyzed (configurable count)
 - Full message content is read but truncated for token efficiency
 
-## Memory Updates
+## Memory Separation
 
-The dream engine can update both memory files:
-- `~/.hermes/memories/MEMORY.md` — Agent's personal notes
-- `~/.hermes/memories/USER.md` — User profile
+Dream processing **never modifies** agent memory (`MEMORY.md`, `USER.md`).
+All findings are written to the dream journal only. Insights and observations
+are logged as suggestions — the user or agent can choose to act on them later.
 
-Safety guards:
-- Duplicate content is skipped
-- Character limits are respected
-- Updates are logged in the dream journal
+This keeps memory under user control and avoids LLM hallucinations
+contaminating persistent knowledge.
 
 ## Disabling
 

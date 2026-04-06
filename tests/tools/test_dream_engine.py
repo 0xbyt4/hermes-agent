@@ -283,18 +283,18 @@ class TestPromptBuilding:
 
 class TestResponseParsing:
     def test_parse_valid_json(self, engine):
-        response = '```json\n{"memory_updates": [], "patterns": ["p1"], "open_threads": [], "session_summary": "test"}\n```'
+        response = '```json\n{"insights": [], "patterns": ["p1"], "open_threads": [], "session_summary": "test"}\n```'
         result = engine.parse_analysis_response(response)
         assert result["patterns"] == ["p1"]
         assert result["session_summary"] == "test"
 
     def test_parse_raw_json(self, engine):
-        response = '{"memory_updates": [], "patterns": [], "open_threads": ["t1"], "session_summary": "s"}'
+        response = '{"insights": [], "patterns": [], "open_threads": ["t1"], "session_summary": "s"}'
         result = engine.parse_analysis_response(response)
         assert result["open_threads"] == ["t1"]
 
     def test_parse_json_in_text(self, engine):
-        response = 'Here is my analysis:\n{"memory_updates": [], "patterns": ["p"], "open_threads": [], "session_summary": "x"}\nThat is all.'
+        response = 'Here is my analysis:\n{"insights": [], "patterns": ["p"], "open_threads": [], "session_summary": "x"}\nThat is all.'
         result = engine.parse_analysis_response(response)
         assert result["patterns"] == ["p"]
 
@@ -302,11 +302,11 @@ class TestResponseParsing:
         response = "This is not JSON at all, just plain text analysis."
         result = engine.parse_analysis_response(response)
         assert "session_summary" in result
-        assert isinstance(result["memory_updates"], list)
+        assert isinstance(result["insights"], list)
 
     def test_parse_empty_response(self, engine):
         result = engine.parse_analysis_response("")
-        assert result["memory_updates"] == []
+        assert result["insights"] == []
         assert result["patterns"] == []
 
 
@@ -327,7 +327,7 @@ class TestJournal:
             "session_summary": "Did some testing.",
             "patterns": ["Pattern A"],
             "open_threads": ["Thread 1"],
-            "memory_updates": [{"action": "add", "target": "memory", "content": "new fact"}],
+            "insights": ["New fact discovered about auth flow"],
         }
         path = engine.write_journal(digests, analysis, "I dreamed about code.")
         assert path.exists()
@@ -412,9 +412,7 @@ class TestFullPipeline:
         ]
 
         analysis_json = json.dumps({
-            "memory_updates": [
-                {"action": "add", "target": "memory", "content": "Auth system uses JWT tokens"}
-            ],
+            "insights": ["Auth system uses JWT tokens"],
             "patterns": ["User focuses on testing after fixes"],
             "open_threads": [],
             "session_summary": "Fixed auth and ran tests.",

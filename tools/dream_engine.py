@@ -299,21 +299,17 @@ class DreamEngine:
             "Respond in this exact JSON format:\n"
             "```json\n"
             "{\n"
-            '  "memory_updates": [\n'
-            '    {"action": "add", "target": "memory", '
-            '"content": "new fact to remember"},\n'
-            '    {"action": "add", "target": "user", '
-            '"content": "user preference or pattern"},\n'
-            '    {"action": "replace", "target": "memory", '
-            '"old": "outdated substring", "content": "updated text"}\n'
+            '  "insights": [\n'
+            '    "new fact or observation worth noting",\n'
+            '    "user preference or behavior pattern discovered"\n'
             "  ],\n"
-            '  "patterns": ["pattern 1", "pattern 2"],\n'
-            '  "open_threads": ["unfinished task 1"],\n'
-            '  "session_summary": "2-3 sentence summary"\n'
+            '  "patterns": ["cross-session pattern 1", "pattern 2"],\n'
+            '  "open_threads": ["unfinished task or ongoing work"],\n'
+            '  "session_summary": "2-3 sentence summary of what happened"\n'
             "}\n"
             "```\n\n"
             "Only include genuine findings. Do not fabricate. "
-            "If memory is already comprehensive, memory_updates can be empty."
+            "If nothing new stands out, keep lists short."
         )
 
     def parse_analysis_response(self, response: str) -> Dict[str, Any]:
@@ -342,7 +338,7 @@ class DreamEngine:
         logger.warning("Dream: could not parse analysis JSON, using raw text")
         return {
             "session_summary": response[:500],
-            "memory_updates": [],
+            "insights": [],
             "patterns": [],
             "open_threads": [],
         }
@@ -351,7 +347,7 @@ class DreamEngine:
     def _empty_analysis() -> Dict[str, Any]:
         return {
             "session_summary": "",
-            "memory_updates": [],
+            "insights": [],
             "patterns": [],
             "open_threads": [],
         }
@@ -440,14 +436,14 @@ class DreamEngine:
                 lines.append(f"- {t}")
             lines.append("")
 
-        if analysis.get("memory_updates"):
-            lines.append("## Memory Updates")
+        if analysis.get("insights"):
+            lines.append("## Insights")
             lines.append("")
-            for u in analysis["memory_updates"]:
-                action = u.get("action", "add")
-                target = u.get("target", "memory")
-                content = u.get("content", "")[:100]
-                lines.append(f"- [{action}] {target}: {content}")
+            for insight in analysis["insights"]:
+                if isinstance(insight, str):
+                    lines.append(f"- {insight}")
+                elif isinstance(insight, dict):
+                    lines.append(f"- {insight.get('content', str(insight))}")
             lines.append("")
 
         if dream_narrative:
@@ -648,8 +644,8 @@ class DreamEngine:
         )
 
         logger.info(
-            "Dream analysis: %d updates, %d patterns, %d threads",
-            len(analysis.get("memory_updates", [])),
+            "Dream analysis: %d insights, %d patterns, %d threads",
+            len(analysis.get("insights", [])),
             len(analysis.get("patterns", [])),
             len(analysis.get("open_threads", [])),
         )
