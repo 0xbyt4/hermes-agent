@@ -5527,7 +5527,7 @@ Examples:
                 return
             print(f"Dream complete!")
             print(f"  Sessions: {result['sessions_processed']}")
-            print(f"  Memory updates: {result['memory_updates_applied']}")
+            print(f"  Patterns: {len(result.get('patterns', []))}")
             print(f"  Log: {result['log_path']}")
             if result.get("patterns"):
                 print("  Patterns:")

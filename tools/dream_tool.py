@@ -74,7 +74,7 @@ def dream_tool(action: str, path: str = "", limit: int = 5) -> str:
                 "status": "complete",
                 "log_path": result["log_path"],
                 "sessions_processed": result["sessions_processed"],
-                "memory_updates_applied": result["memory_updates_applied"],
+                "patterns_found": len(result.get("patterns", [])),
                 "patterns": result["patterns"],
                 "session_summary": result["session_summary"],
                 "dream_narrative": result["dream_narrative"][:500],

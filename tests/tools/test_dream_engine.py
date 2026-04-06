@@ -353,48 +353,6 @@ class TestJournal:
 # ---------------------------------------------------------------------------
 
 
-class TestMemoryUpdates:
-    def test_apply_add(self, engine, tmp_hermes):
-        mem_dir = tmp_hermes / "memories"
-        (mem_dir / "MEMORY.md").write_text("existing fact", encoding="utf-8")
-        (mem_dir / "USER.md").write_text("", encoding="utf-8")
-
-        updates = [{"action": "add", "target": "memory", "content": "new fact"}]
-
-        with patch("tools.memory_tool.get_memory_dir", return_value=mem_dir):
-            applied = engine.apply_memory_updates(updates)
-
-        assert applied == 1
-        content = (mem_dir / "MEMORY.md").read_text(encoding="utf-8")
-        assert "new fact" in content
-
-    def test_skip_duplicate(self, engine, tmp_hermes):
-        mem_dir = tmp_hermes / "memories"
-        (mem_dir / "MEMORY.md").write_text("existing fact about auth", encoding="utf-8")
-        (mem_dir / "USER.md").write_text("", encoding="utf-8")
-
-        updates = [{"action": "add", "target": "memory", "content": "existing fact about auth"}]
-
-        with patch("tools.memory_tool.get_memory_dir", return_value=mem_dir):
-            applied = engine.apply_memory_updates(updates)
-
-        assert applied == 0
-
-    def test_apply_to_user_profile(self, engine, tmp_hermes):
-        mem_dir = tmp_hermes / "memories"
-        (mem_dir / "MEMORY.md").write_text("", encoding="utf-8")
-        (mem_dir / "USER.md").write_text("", encoding="utf-8")
-
-        updates = [{"action": "add", "target": "user", "content": "prefers dark mode"}]
-
-        with patch("tools.memory_tool.get_memory_dir", return_value=mem_dir):
-            applied = engine.apply_memory_updates(updates)
-
-        assert applied == 1
-        content = (mem_dir / "USER.md").read_text(encoding="utf-8")
-        assert "dark mode" in content
-
-
 # ---------------------------------------------------------------------------
 # Status and history tests
 # ---------------------------------------------------------------------------
@@ -467,13 +425,12 @@ class TestFullPipeline:
                  f"```json\n{analysis_json}\n```",
                  "I noticed the user always tests after fixing. Solid discipline.",
              ]), \
-             patch("tools.memory_tool.get_memory_dir", return_value=mem_dir):
+             patch.object(engine, "_load_memory_files", return_value=("old memory", "user info")):
 
             result = engine.run()
 
         assert result is not None
         assert result["sessions_processed"] == 1
-        assert result["memory_updates_applied"] == 1
         assert "testing" in result["patterns"][0].lower()
         assert "discipline" in result["dream_narrative"].lower()
         assert Path(result["log_path"]).exists()

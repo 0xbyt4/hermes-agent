@@ -3396,7 +3396,7 @@ class GatewayRunner:
             "**Dream Complete**",
             "",
             f"Sessions processed: {result['sessions_processed']}",
-            f"Memory updates: {result['memory_updates_applied']}",
+            f"Patterns: {len(result.get('patterns', []))}",
         ]
         if result.get("patterns"):
             lines.append("")

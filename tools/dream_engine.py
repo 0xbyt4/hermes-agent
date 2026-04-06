@@ -475,76 +475,6 @@ class DreamEngine:
         state["dream_count"] = state.get("dream_count", 0) + 1
         self.state.save(state)
 
-    def apply_memory_updates(self, updates: List[Dict]) -> int:
-        """Apply memory updates from consolidation. Returns count applied."""
-        if not updates:
-            return 0
-
-        try:
-            from tools.memory_tool import MemoryStore, get_memory_dir
-        except ImportError:
-            logger.warning("Dream: memory_tool not available, skipping updates")
-            return 0
-
-        store = MemoryStore()
-        store.load_from_disk()
-        applied = 0
-
-        for update in updates:
-            action = update.get("action", "add")
-            target = update.get("target", "memory")
-            content = update.get("content", "").strip()
-            if not content:
-                continue
-
-            entries = (
-                store.memory_entries if target == "memory" else store.user_entries
-            )
-            char_limit = (
-                store.memory_char_limit
-                if target == "memory"
-                else store.user_char_limit
-            )
-
-            if action == "add":
-                # Skip if similar content exists
-                content_lower = content.lower()
-                if any(
-                    content_lower in e.lower() or e.lower() in content_lower
-                    for e in entries
-                ):
-                    continue
-                # Check char limit
-                current_chars = sum(len(e) for e in entries)
-                if current_chars + len(content) > char_limit:
-                    logger.info(
-                        "Dream: skipping add to %s — would exceed %d char limit",
-                        target,
-                        char_limit,
-                    )
-                    continue
-                entries.append(content)
-                applied += 1
-
-            elif action == "replace":
-                old = update.get("old", "")
-                if old:
-                    for i, entry in enumerate(entries):
-                        if old in entry:
-                            entries[i] = entry.replace(old, content)
-                            applied += 1
-                            break
-
-            elif action == "remove":
-                old = update.get("old", content)
-                before = len(entries)
-                entries[:] = [e for e in entries if old not in e]
-                applied += before - len(entries)
-
-            store.save_to_disk(target)
-
-        return applied
-
     # =====================================================================
     # LLM call
     # =====================================================================
@@ -694,22 +624,15 @@ class DreamEngine:
             creative_prompt, model=self.creative_model
         ) or ""
 
-        # Stage 5: JOURNAL
+        # Stage 5: JOURNAL — write log only, never touch memory
         log_path = self.write_journal(digests, analysis, dream_narrative)
         self.advance_cursor(digests)
 
-        # Apply memory updates
-        updates_applied = self.apply_memory_updates(
-            analysis.get("memory_updates", [])
-        )
-        logger.info(
-            "Dream complete: %s (%d memory updates applied)", log_path, updates_applied
-        )
+        logger.info("Dream complete: %s", log_path)
 
         return {
             "log_path": str(log_path),
             "sessions_processed": len(digests),
-            "memory_updates_applied": updates_applied,
             "patterns": analysis.get("patterns", []),
             "open_threads": analysis.get("open_threads", []),
             "session_summary": analysis.get("session_summary", ""),

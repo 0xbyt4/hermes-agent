@@ -3115,7 +3115,7 @@ class HermesCLI:
 
         print()
         _cprint(f"  Sessions processed: {result['sessions_processed']}")
-        _cprint(f"  Memory updates: {result['memory_updates_applied']}")
+        _cprint(f"  Patterns: {len(result.get('patterns', []))}")
         if result.get('patterns'):
             _cprint("  Patterns:")
             for p in result['patterns']:
