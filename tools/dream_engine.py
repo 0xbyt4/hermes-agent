@@ -510,6 +510,12 @@ class DreamEngine:
             logger.error("Dream: no API key available for provider %s", provider)
             return None
 
+        logger.info(
+            "Dream LLM call: provider=%s model=%s token=%s... base_url=%r prompt_len=%d",
+            provider, model, api_key[:20] if api_key else "NONE",
+            base_url, len(prompt),
+        )
+
         try:
             return self._call_provider(provider, model, api_key, base_url, prompt)
         except Exception as e:
@@ -556,16 +562,31 @@ class DreamEngine:
                 import anthropic
                 client = anthropic.Anthropic(api_key=api_key)
 
-            # Use system prompt with cache_control to benefit from prompt
-            # caching — without this, OAuth tokens hit rate limits much faster.
+            # OAuth tokens require Claude Code identity in system prompt
+            # for correct routing. Without this, Sonnet/Opus get 429.
+            try:
+                from agent.anthropic_adapter import _is_oauth_token
+                is_oauth = _is_oauth_token(api_key)
+            except ImportError:
+                is_oauth = api_key.startswith("sk-ant-oat")
+
+            system_blocks = []
+            if is_oauth:
+                system_blocks.append({
+                    "type": "text",
+                    "text": "You are Claude Code, Anthropic's official CLI for Claude.",
+                    "cache_control": {"type": "ephemeral"},
+                })
+            system_blocks.append({
+                "type": "text",
+                "text": "You are a dream processing engine for an AI agent.",
+                "cache_control": {"type": "ephemeral"},
+            })
+
             response = client.messages.create(
                 model=model,
                 max_tokens=8000,
-                system=[{
-                    "type": "text",
-                    "text": "You are a dream processing engine for an AI agent.",
-                    "cache_control": {"type": "ephemeral"},
-                }],
+                system=system_blocks,
                 messages=[{
                     "role": "user",
                     "content": [{
