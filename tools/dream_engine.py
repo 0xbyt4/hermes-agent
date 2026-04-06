@@ -554,15 +554,15 @@ class DreamEngine:
     ) -> Optional[str]:
         """Make an LLM call for dream processing.
 
-        Resolves provider and API key from dream config, falling back to
-        the main model config and environment variables.
+        Uses Hermes' own token resolution (OAuth, env vars, credential files)
+        so dream works with the same auth as the main agent.
         """
         model = model or self.model
         provider = self.config.get("provider", "").strip()
         api_key = self.config.get("api_key", "").strip()
         base_url = self.config.get("base_url", "").strip()
 
-        # Resolve provider from model name if not set
+        # Resolve provider from main config if not set
         if not provider:
             try:
                 from hermes_cli.config import load_config
@@ -571,18 +571,9 @@ class DreamEngine:
             except Exception:
                 provider = "anthropic"
 
-        # Resolve API key from environment if not set
+        # Resolve API key using Hermes' auth chain (OAuth, env vars, credentials)
         if not api_key:
-            if provider == "anthropic":
-                api_key = os.getenv("ANTHROPIC_API_KEY", "")
-            elif provider in ("openai", "codex"):
-                api_key = os.getenv("OPENAI_API_KEY", "")
-            elif provider == "openrouter":
-                api_key = os.getenv("OPENROUTER_API_KEY", "")
-            else:
-                api_key = os.getenv("ANTHROPIC_API_KEY", "") or os.getenv(
-                    "OPENAI_API_KEY", ""
-                )
+            api_key = self._resolve_api_key(provider)
 
         if not api_key:
             logger.error("Dream: no API key available for provider %s", provider)
@@ -594,6 +585,27 @@ class DreamEngine:
             logger.error("Dream LLM call failed (%s/%s): %s", provider, model, e)
             return None
 
+    @staticmethod
+    def _resolve_api_key(provider: str) -> str:
+        """Resolve API key using Hermes' full auth chain."""
+        if provider == "anthropic":
+            # Use Hermes' resolve_anthropic_token which handles:
+            # ANTHROPIC_TOKEN (OAuth), CLAUDE_CODE_OAUTH_TOKEN,
+            # Claude Code credentials (~/.claude.json), ANTHROPIC_API_KEY
+            try:
+                from agent.anthropic_adapter import resolve_anthropic_token
+                token = resolve_anthropic_token()
+                if token:
+                    return token
+            except ImportError:
+                pass
+            return os.getenv("ANTHROPIC_API_KEY", "")
+        elif provider in ("openai", "codex"):
+            return os.getenv("OPENAI_API_KEY", "")
+        elif provider == "openrouter":
+            return os.getenv("OPENROUTER_API_KEY", "")
+        return os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
+
     def _call_provider(
         self,
         provider: str,
@@ -604,9 +616,15 @@ class DreamEngine:
     ) -> Optional[str]:
         """Dispatch LLM call to the appropriate provider SDK."""
         if provider == "anthropic" and not base_url:
-            import anthropic
+            # Use Hermes' build_anthropic_client which handles OAuth tokens,
+            # Bearer auth, user-agent headers, and beta flags correctly.
+            try:
+                from agent.anthropic_adapter import build_anthropic_client
+                client = build_anthropic_client(api_key, base_url)
+            except ImportError:
+                import anthropic
+                client = anthropic.Anthropic(api_key=api_key)
 
-            client = anthropic.Anthropic(api_key=api_key)
             response = client.messages.create(
                 model=model,
                 max_tokens=2000,
