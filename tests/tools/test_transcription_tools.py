@@ -504,6 +504,136 @@ class TestTranscribeLocalExtended:
         assert result["success"] is True
         assert result["transcript"] == "Hello world"
 
+    def test_language_param_passed_to_whisper(self, tmp_path):
+        """When language is provided, it must be forwarded to whisper transcribe()."""
+        audio = tmp_path / "test.ogg"
+        audio.write_bytes(b"fake")
+
+        mock_segment = MagicMock()
+        mock_segment.text = "Czesc"
+        mock_info = MagicMock()
+        mock_info.language = "pl"
+        mock_info.duration = 2.0
+
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = ([mock_segment], mock_info)
+
+        with patch("tools.transcription_tools._HAS_FASTER_WHISPER", True), \
+             patch("faster_whisper.WhisperModel", return_value=mock_model), \
+             patch("tools.transcription_tools._local_model", None):
+            from tools.transcription_tools import _transcribe_local
+            result = _transcribe_local(str(audio), "base", language="pl")
+
+        mock_model.transcribe.assert_called_once_with(
+            str(audio), beam_size=5, language="pl",
+        )
+        assert result["success"] is True
+
+    def test_language_env_var_used_as_fallback(self, tmp_path, monkeypatch):
+        """HERMES_LOCAL_STT_LANGUAGE env var should be used when no explicit language."""
+        monkeypatch.setenv("HERMES_LOCAL_STT_LANGUAGE", "tr")
+        audio = tmp_path / "test.ogg"
+        audio.write_bytes(b"fake")
+
+        mock_segment = MagicMock()
+        mock_segment.text = "Merhaba"
+        mock_info = MagicMock()
+        mock_info.language = "tr"
+        mock_info.duration = 1.0
+
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = ([mock_segment], mock_info)
+
+        with patch("tools.transcription_tools._HAS_FASTER_WHISPER", True), \
+             patch("faster_whisper.WhisperModel", return_value=mock_model), \
+             patch("tools.transcription_tools._local_model", None):
+            from tools.transcription_tools import _transcribe_local
+            _transcribe_local(str(audio), "base")
+
+        mock_model.transcribe.assert_called_once_with(
+            str(audio), beam_size=5, language="tr",
+        )
+
+    def test_language_param_overrides_env_var(self, tmp_path, monkeypatch):
+        """Explicit language param takes precedence over env var."""
+        monkeypatch.setenv("HERMES_LOCAL_STT_LANGUAGE", "en")
+        audio = tmp_path / "test.ogg"
+        audio.write_bytes(b"fake")
+
+        mock_segment = MagicMock()
+        mock_segment.text = "Bonjour"
+        mock_info = MagicMock()
+        mock_info.language = "fr"
+        mock_info.duration = 1.0
+
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = ([mock_segment], mock_info)
+
+        with patch("tools.transcription_tools._HAS_FASTER_WHISPER", True), \
+             patch("faster_whisper.WhisperModel", return_value=mock_model), \
+             patch("tools.transcription_tools._local_model", None):
+            from tools.transcription_tools import _transcribe_local
+            _transcribe_local(str(audio), "base", language="fr")
+
+        mock_model.transcribe.assert_called_once_with(
+            str(audio), beam_size=5, language="fr",
+        )
+
+    def test_no_language_passes_none(self, tmp_path, monkeypatch):
+        """Without language param or env var, None is passed (auto-detect)."""
+        monkeypatch.delenv("HERMES_LOCAL_STT_LANGUAGE", raising=False)
+        audio = tmp_path / "test.ogg"
+        audio.write_bytes(b"fake")
+
+        mock_segment = MagicMock()
+        mock_segment.text = "hello"
+        mock_info = MagicMock()
+        mock_info.language = "en"
+        mock_info.duration = 1.0
+
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = ([mock_segment], mock_info)
+
+        with patch("tools.transcription_tools._HAS_FASTER_WHISPER", True), \
+             patch("faster_whisper.WhisperModel", return_value=mock_model), \
+             patch("tools.transcription_tools._local_model", None):
+            from tools.transcription_tools import _transcribe_local
+            _transcribe_local(str(audio), "base")
+
+        mock_model.transcribe.assert_called_once_with(
+            str(audio), beam_size=5, language=None,
+        )
+
+
+# ============================================================================
+# Dispatch: transcribe_audio — language from config
+# ============================================================================
+
+class TestTranscribeAudioLanguageConfig:
+    def test_config_language_passed_to_local(self, sample_ogg):
+        """stt.local.language from config.yaml should reach _transcribe_local."""
+        config = {"local": {"model": "base", "language": "pl"}}
+        with patch("tools.transcription_tools._load_stt_config", return_value=config), \
+             patch("tools.transcription_tools._get_provider", return_value="local"), \
+             patch("tools.transcription_tools._transcribe_local",
+                   return_value={"success": True, "transcript": "Czesc"}) as mock_local:
+            from tools.transcription_tools import transcribe_audio
+            transcribe_audio(sample_ogg)
+
+        assert mock_local.call_args[1]["language"] == "pl"
+
+    def test_no_config_language_passes_none(self, sample_ogg):
+        """Without language in config, None should be passed."""
+        config = {"local": {"model": "base"}}
+        with patch("tools.transcription_tools._load_stt_config", return_value=config), \
+             patch("tools.transcription_tools._get_provider", return_value="local"), \
+             patch("tools.transcription_tools._transcribe_local",
+                   return_value={"success": True, "transcript": "hi"}) as mock_local:
+            from tools.transcription_tools import transcribe_audio
+            transcribe_audio(sample_ogg)
+
+        assert mock_local.call_args[1]["language"] is None
+
 
 # ============================================================================
 # Model auto-correction

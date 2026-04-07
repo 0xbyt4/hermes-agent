@@ -284,7 +284,7 @@ def _validate_audio_file(file_path: str) -> Optional[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _transcribe_local(file_path: str, model_name: str) -> Dict[str, Any]:
+def _transcribe_local(file_path: str, model_name: str, language: str = None) -> Dict[str, Any]:
     """Transcribe using faster-whisper (local, free)."""
     global _local_model, _local_model_name
 
@@ -299,7 +299,10 @@ def _transcribe_local(file_path: str, model_name: str) -> Dict[str, Any]:
             _local_model = WhisperModel(model_name, device="auto", compute_type="auto")
             _local_model_name = model_name
 
-        segments, info = _local_model.transcribe(file_path, beam_size=5)
+        lang = language or os.getenv(LOCAL_STT_LANGUAGE_ENV) or None
+        segments, info = _local_model.transcribe(
+            file_path, beam_size=5, language=lang,
+        )
         transcript = " ".join(segment.text.strip() for segment in segments)
 
         logger.info(
@@ -548,7 +551,8 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
     if provider == "local":
         local_cfg = stt_config.get("local", {})
         model_name = model or local_cfg.get("model", DEFAULT_LOCAL_MODEL)
-        return _transcribe_local(file_path, model_name)
+        language = local_cfg.get("language") or None
+        return _transcribe_local(file_path, model_name, language=language)
 
     if provider == "local_command":
         local_cfg = stt_config.get("local", {})
