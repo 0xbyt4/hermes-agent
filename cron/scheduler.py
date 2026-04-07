@@ -159,6 +159,37 @@ def _resolve_delivery_target(job: dict) -> Optional[dict]:
     }
 
 
+_AUDIO_EXTS = {".ogg", ".opus", ".mp3", ".wav", ".m4a"}
+_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+def _deliver_media_via_adapter(adapter, chat_id, media_files, metadata, loop, job_id):
+    """Send extracted media files through the live adapter's typed send methods."""
+    from pathlib import Path
+
+    async def _send_all():
+        for media_path, _is_voice in media_files:
+            try:
+                ext = Path(media_path).suffix.lower()
+                if ext in _AUDIO_EXTS:
+                    await adapter.send_voice(chat_id=chat_id, audio_path=media_path, metadata=metadata)
+                elif ext in _VIDEO_EXTS:
+                    await adapter.send_video(chat_id=chat_id, video_path=media_path, metadata=metadata)
+                elif ext in _IMAGE_EXTS:
+                    await adapter.send_image_file(chat_id=chat_id, image_path=media_path, metadata=metadata)
+                else:
+                    await adapter.send_document(chat_id=chat_id, file_path=media_path, metadata=metadata)
+            except Exception as e:
+                logger.warning("Job '%s': media delivery failed for %s: %s", job_id, media_path, e)
+
+    try:
+        future = asyncio.run_coroutine_threadsafe(_send_all(), loop)
+        future.result(timeout=60)
+    except Exception as e:
+        logger.warning("Job '%s': media delivery via live adapter failed: %s", job_id, e)
+
+
 def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> None:
     """
     Deliver job output to the configured target (origin chat, specific platform, etc.).
@@ -248,7 +279,7 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> None:
         send_metadata = {"thread_id": thread_id} if thread_id else None
         try:
             future = asyncio.run_coroutine_threadsafe(
-                runtime_adapter.send(chat_id, delivery_content, metadata=send_metadata),
+                runtime_adapter.send(chat_id, cleaned_delivery_content, metadata=send_metadata),
                 loop,
             )
             send_result = future.result(timeout=60)
@@ -259,6 +290,9 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> None:
                     job["id"], platform_name, chat_id, err,
                 )
             else:
+                # Deliver extracted media files via adapter-specific methods
+                if media_files:
+                    _deliver_media_via_adapter(runtime_adapter, chat_id, media_files, send_metadata, loop, job["id"])
                 logger.info("Job '%s': delivered to %s:%s via live adapter", job["id"], platform_name, chat_id)
                 return
         except Exception as e:

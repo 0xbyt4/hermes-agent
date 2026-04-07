@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
-from cron.scheduler import _resolve_origin, _resolve_delivery_target, _deliver_result, run_job, SILENT_MARKER, _build_job_prompt
+from cron.scheduler import _resolve_origin, _resolve_delivery_target, _deliver_result, _deliver_media_via_adapter, run_job, SILENT_MARKER, _build_job_prompt
 
 
 class TestResolveOrigin:
@@ -276,6 +276,85 @@ class TestDeliverResultWrapping:
         assert "Title" in args[3]
         # Media files should be forwarded separately
         assert kwargs["media_files"] == [("/tmp/test-voice.ogg", False)]
+
+    def test_live_adapter_sends_cleaned_content(self):
+        """Live adapter path should send cleaned content without MEDIA: tags."""
+        import asyncio
+        import threading
+        from gateway.config import Platform
+
+        mock_adapter = MagicMock()
+        mock_send_result = MagicMock(success=True)
+        mock_adapter.send = AsyncMock(return_value=mock_send_result)
+
+        loop = asyncio.new_event_loop()
+        t = threading.Thread(target=loop.run_forever, daemon=True)
+        t.start()
+        adapters = {Platform.TELEGRAM: mock_adapter}
+
+        try:
+            with patch("gateway.config.load_gateway_config") as mock_cfg, \
+                 patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": False}}), \
+                 patch("cron.scheduler._deliver_media_via_adapter") as mock_media:
+                pcfg = MagicMock()
+                pcfg.enabled = True
+                mock_cfg.return_value.platforms = {Platform.TELEGRAM: pcfg}
+
+                job = {
+                    "id": "media-job",
+                    "deliver": "origin",
+                    "origin": {"platform": "telegram", "chat_id": "123"},
+                }
+                _deliver_result(job, "Report\nMEDIA:/tmp/voice.ogg", adapters=adapters, loop=loop)
+
+            # adapter.send should receive cleaned text, not raw MEDIA tags
+            mock_adapter.send.assert_called_once()
+            sent_text = mock_adapter.send.call_args[0][1]
+            assert "MEDIA:" not in sent_text
+            assert "Report" in sent_text
+            # media delivery helper should be called with extracted files
+            mock_media.assert_called_once()
+            assert mock_media.call_args[0][2] == [("/tmp/voice.ogg", False)]
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            t.join(timeout=5)
+            loop.close()
+
+    def test_live_adapter_no_media_call_when_text_only(self):
+        """Live adapter path should skip media delivery when no MEDIA: tags present."""
+        import asyncio
+        import threading
+        from gateway.config import Platform
+
+        mock_adapter = MagicMock()
+        mock_adapter.send = AsyncMock(return_value=MagicMock(success=True))
+
+        loop = asyncio.new_event_loop()
+        t = threading.Thread(target=loop.run_forever, daemon=True)
+        t.start()
+        adapters = {Platform.TELEGRAM: mock_adapter}
+
+        try:
+            with patch("gateway.config.load_gateway_config") as mock_cfg, \
+                 patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": False}}), \
+                 patch("cron.scheduler._deliver_media_via_adapter") as mock_media:
+                pcfg = MagicMock()
+                pcfg.enabled = True
+                mock_cfg.return_value.platforms = {Platform.TELEGRAM: pcfg}
+
+                job = {
+                    "id": "text-job",
+                    "deliver": "origin",
+                    "origin": {"platform": "telegram", "chat_id": "123"},
+                }
+                _deliver_result(job, "Just text, no media.", adapters=adapters, loop=loop)
+
+            mock_adapter.send.assert_called_once()
+            mock_media.assert_not_called()
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            t.join(timeout=5)
+            loop.close()
 
     def test_no_mirror_to_session_call(self):
         """Cron deliveries should NOT mirror into the gateway session."""
@@ -850,3 +929,73 @@ class TestTickAdvanceBeforeRun:
         adv_mock.assert_called_once_with("test-advance")
         # advance must happen before run
         assert call_order == [("advance", "test-advance"), ("run", "test-advance")]
+
+
+class TestDeliverMediaViaAdapter:
+    """Tests for _deliver_media_via_adapter — routes files to typed adapter methods."""
+
+    @staticmethod
+    def _run_with_loop(adapter, chat_id, media_files, metadata, job_id):
+        """Helper: run _deliver_media_via_adapter with a real running event loop."""
+        import asyncio
+        import threading
+
+        loop = asyncio.new_event_loop()
+        t = threading.Thread(target=loop.run_forever, daemon=True)
+        t.start()
+        try:
+            _deliver_media_via_adapter(adapter, chat_id, media_files, metadata, loop, job_id)
+        finally:
+            loop.call_soon_threadsafe(loop.stop)
+            t.join(timeout=5)
+            loop.close()
+
+    def test_audio_dispatched_to_send_voice(self):
+        adapter = MagicMock()
+        adapter.send_voice = AsyncMock()
+        media_files = [("/tmp/reply.ogg", False)]
+        self._run_with_loop(adapter, "123", media_files, None, "j1")
+        adapter.send_voice.assert_called_once()
+        assert adapter.send_voice.call_args[1]["audio_path"] == "/tmp/reply.ogg"
+
+    def test_image_dispatched_to_send_image(self):
+        adapter = MagicMock()
+        adapter.send_image_file = AsyncMock()
+        media_files = [("/tmp/chart.png", False)]
+        self._run_with_loop(adapter, "123", media_files, None, "j2")
+        adapter.send_image_file.assert_called_once()
+        assert adapter.send_image_file.call_args[1]["image_path"] == "/tmp/chart.png"
+
+    def test_video_dispatched_to_send_video(self):
+        adapter = MagicMock()
+        adapter.send_video = AsyncMock()
+        media_files = [("/tmp/clip.mp4", False)]
+        self._run_with_loop(adapter, "123", media_files, None, "j3")
+        adapter.send_video.assert_called_once()
+        assert adapter.send_video.call_args[1]["video_path"] == "/tmp/clip.mp4"
+
+    def test_unknown_ext_dispatched_to_send_document(self):
+        adapter = MagicMock()
+        adapter.send_document = AsyncMock()
+        media_files = [("/tmp/report.pdf", False)]
+        self._run_with_loop(adapter, "123", media_files, None, "j4")
+        adapter.send_document.assert_called_once()
+        assert adapter.send_document.call_args[1]["file_path"] == "/tmp/report.pdf"
+
+    def test_multiple_media_files_all_delivered(self):
+        adapter = MagicMock()
+        adapter.send_voice = AsyncMock()
+        adapter.send_image_file = AsyncMock()
+        media_files = [("/tmp/voice.mp3", False), ("/tmp/photo.jpg", False)]
+        self._run_with_loop(adapter, "123", media_files, None, "j5")
+        adapter.send_voice.assert_called_once()
+        adapter.send_image_file.assert_called_once()
+
+    def test_single_failure_does_not_block_others(self):
+        adapter = MagicMock()
+        adapter.send_voice = AsyncMock(side_effect=RuntimeError("network error"))
+        adapter.send_image_file = AsyncMock()
+        media_files = [("/tmp/voice.ogg", False), ("/tmp/photo.png", False)]
+        self._run_with_loop(adapter, "123", media_files, None, "j6")
+        adapter.send_voice.assert_called_once()
+        adapter.send_image_file.assert_called_once()
