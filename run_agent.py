@@ -3895,7 +3895,26 @@ class AIAgent:
                             reasoning_text = getattr(event, "delta", "")
                             if reasoning_text:
                                 self._fire_reasoning_delta(reasoning_text)
-                    return stream.get_final_response()
+                    final_resp = stream.get_final_response()
+                    # OpenAI Codex API (gpt-5.4+) may return response.output=[]
+                    # even though text was delivered via streaming deltas. The SDK
+                    # accumulates a correct snapshot internally — use it as fallback.
+                    if (
+                        final_resp is not None
+                        and isinstance(getattr(final_resp, "output", None), list)
+                        and len(final_resp.output) == 0
+                    ):
+                        snapshot = getattr(
+                            getattr(stream, "_state", None),
+                            "_ResponseStreamState__current_snapshot",
+                            None,
+                        )
+                        if snapshot is not None and getattr(snapshot, "output", None):
+                            for _item in snapshot.output:
+                                if hasattr(_item, "status"):
+                                    _item.status = "completed"
+                            final_resp.output = snapshot.output
+                    return final_resp
             except (_httpx.RemoteProtocolError, _httpx.ReadTimeout, _httpx.ConnectError, ConnectionError) as exc:
                 if attempt < max_stream_retries:
                     logger.debug(

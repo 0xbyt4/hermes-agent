@@ -148,9 +148,15 @@ def _codex_ack_message_response(text: str):
 
 
 class _FakeResponsesStream:
-    def __init__(self, *, final_response=None, final_error=None):
+    def __init__(self, *, final_response=None, final_error=None, events=None, snapshot=None):
         self._final_response = final_response
         self._final_error = final_error
+        self._events = events or []
+        # Simulate SDK internal snapshot (stream._state.__current_snapshot)
+        if snapshot is not None:
+            self._state = SimpleNamespace(
+                **{"_ResponseStreamState__current_snapshot": snapshot}
+            )
 
     def __enter__(self):
         return self
@@ -159,7 +165,7 @@ class _FakeResponsesStream:
         return False
 
     def __iter__(self):
-        return iter(())
+        return iter(self._events)
 
     def get_final_response(self):
         if self._final_error is not None:
@@ -1039,3 +1045,94 @@ def test_duplicate_detection_distinguishes_different_codex_reasoning(monkeypatch
     ]
     assert "enc_first" in encrypted_contents
     assert "enc_second" in encrypted_contents
+
+
+# --- Empty output[] fallback via SDK snapshot (fix for gpt-5.4) ---
+
+
+def test_run_codex_stream_recovers_from_empty_output_via_snapshot(monkeypatch):
+    """When get_final_response() returns output=[], the SDK's internal snapshot
+    should be used as fallback to recover the streamed text."""
+    agent = _build_agent(monkeypatch)
+
+    empty_response = SimpleNamespace(
+        output=[],
+        usage=SimpleNamespace(input_tokens=10, output_tokens=5, total_tokens=15),
+        status="completed",
+        model="gpt-5.4",
+    )
+    snapshot = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="message",
+                status="in_progress",
+                content=[SimpleNamespace(type="output_text", text="Hello from snapshot")],
+            )
+        ],
+        usage=SimpleNamespace(input_tokens=10, output_tokens=5, total_tokens=15),
+        status="completed",
+        model="gpt-5.4",
+    )
+    delta_event = SimpleNamespace(type="response.output_text.delta", delta="Hello from snapshot")
+    stream = _FakeResponsesStream(
+        final_response=empty_response,
+        events=[delta_event],
+        snapshot=snapshot,
+    )
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(stream=lambda **kwargs: stream)
+    )
+
+    response = agent._run_codex_stream(_codex_request_kwargs())
+    assert len(response.output) == 1
+    assert response.output[0].content[0].text == "Hello from snapshot"
+    # Status should be patched from in_progress to completed
+    assert response.output[0].status == "completed"
+
+
+def test_run_codex_stream_no_snapshot_returns_empty_output(monkeypatch):
+    """When output=[] and no snapshot exists, return the empty response as-is."""
+    agent = _build_agent(monkeypatch)
+
+    empty_response = SimpleNamespace(
+        output=[],
+        usage=SimpleNamespace(input_tokens=10, output_tokens=5, total_tokens=15),
+        status="completed",
+        model="gpt-5.4",
+    )
+    stream = _FakeResponsesStream(final_response=empty_response)
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(stream=lambda **kwargs: stream)
+    )
+
+    response = agent._run_codex_stream(_codex_request_kwargs())
+    assert response.output == []
+
+
+def test_run_codex_stream_nonempty_output_unchanged(monkeypatch):
+    """When output is non-empty, snapshot fallback should NOT be triggered."""
+    agent = _build_agent(monkeypatch)
+
+    normal_response = _codex_message_response("normal response")
+    snapshot = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="message",
+                status="completed",
+                content=[SimpleNamespace(type="output_text", text="WRONG - should not use snapshot")],
+            )
+        ],
+    )
+    stream = _FakeResponsesStream(
+        final_response=normal_response,
+        snapshot=snapshot,
+    )
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(stream=lambda **kwargs: stream)
+    )
+
+    response = agent._run_codex_stream(_codex_request_kwargs())
+    assert response.output[0].content[0].text == "normal response"
