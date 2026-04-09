@@ -525,6 +525,26 @@ try:
 except Exception:
     pass
 
+# Dev-only self-watcher: notify the active gateway when the hermes source
+# tree changes. Off by default; enable via `self_watcher.enabled: true` in
+# cli-config.yaml / ~/.hermes/config.yaml. Silent no-op if not a git repo.
+_SELF_WATCHER = None
+try:
+    from agent.self_watcher import start_from_config as _start_self_watcher
+    _SELF_WATCHER = _start_self_watcher(CLI_CONFIG.get("self_watcher"))
+except Exception:
+    _SELF_WATCHER = None
+
+# Expose a stop hook so tests/hosts that care can clean up the thread.
+def _stop_self_watcher() -> None:
+    global _SELF_WATCHER
+    if _SELF_WATCHER is not None:
+        try:
+            _SELF_WATCHER.stop()
+        except Exception:
+            pass
+        _SELF_WATCHER = None
+
 # Initialize the skin engine from config
 try:
     from hermes_cli.skin_engine import init_skin_from_config

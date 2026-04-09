@@ -867,3 +867,22 @@ display:
 #   # Names and usernames are NOT affected (user-chosen, publicly visible).
 #   # Routing/delivery still uses the original values internally.
 #   redact_pii: false
+
+# =============================================================================
+# Self Watcher (dev-only)
+# =============================================================================
+# Polls `git status` inside the hermes-agent repo and sends a `git diff --stat`
+# summary to the first reachable channel from `priority` whenever the source
+# tree changes. Intended for contributors hacking on hermes itself -- silently
+# no-ops when run outside a git checkout or for pip-installed users.
+#
+# The watcher calls through the existing send_message tool, so it reuses
+# whatever home channels are configured for each platform (no extra setup).
+#
+# self_watcher:
+#   enabled: false              # default off; dev-only feature
+#   poll_interval_min: 1        # minutes between git polls (min 0.1)
+#   priority:                   # try each in order, stop on first success
+#     - telegram
+#     - discord
+#     - cli                     # fallback: print to stdout

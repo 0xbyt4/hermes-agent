@@ -7677,6 +7677,15 @@ def main():
             data = json.load(f)
             config = GatewayConfig.from_dict(data)
     
+    # Dev-only self-watcher: notify the active gateway when the hermes
+    # source tree changes. Off by default; see cli-config.yaml.example
+    # for the `self_watcher` section. Silent no-op outside a git checkout.
+    try:
+        from agent.self_watcher import start_if_enabled as _start_self_watcher
+        _start_self_watcher()
+    except Exception:
+        pass
+
     # Run the gateway - exit with code 1 if no platforms connected,
     # so systemd Restart=on-failure will retry on transient errors (e.g. DNS)
     success = asyncio.run(start_gateway(config))
