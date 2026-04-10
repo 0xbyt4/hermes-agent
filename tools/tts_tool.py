@@ -179,8 +179,14 @@ async def _generate_edge_tts(text: str, output_path: str, tts_config: Dict[str, 
     _edge_tts = _import_edge_tts()
     edge_config = tts_config.get("edge", {})
     voice = edge_config.get("voice", DEFAULT_EDGE_VOICE)
+    speed = float(tts_config.get("speed", edge_config.get("speed", 1.0)))
 
-    communicate = _edge_tts.Communicate(text, voice)
+    kwargs = {"voice": voice}
+    if speed != 1.0:
+        pct = round((speed - 1.0) * 100)
+        kwargs["rate"] = f"{pct:+d}%"
+
+    communicate = _edge_tts.Communicate(text, **kwargs)
     await communicate.save(output_path)
     return output_path
 
@@ -252,6 +258,7 @@ def _generate_openai_tts(text: str, output_path: str, tts_config: Dict[str, Any]
     model = oai_config.get("model", DEFAULT_OPENAI_MODEL)
     voice = oai_config.get("voice", DEFAULT_OPENAI_VOICE)
     base_url = oai_config.get("base_url", base_url)
+    speed = float(tts_config.get("speed", oai_config.get("speed", 1.0)))
 
     # Determine response format from extension
     if output_path.endswith(".ogg"):
@@ -262,13 +269,16 @@ def _generate_openai_tts(text: str, output_path: str, tts_config: Dict[str, Any]
     OpenAIClient = _import_openai_client()
     client = OpenAIClient(api_key=api_key, base_url=base_url)
     try:
-        response = client.audio.speech.create(
+        create_kwargs = dict(
             model=model,
             voice=voice,
             input=text,
             response_format=response_format,
             extra_headers={"x-idempotency-key": str(uuid.uuid4())},
         )
+        if speed != 1.0:
+            create_kwargs["speed"] = max(0.25, min(4.0, speed))
+        response = client.audio.speech.create(**create_kwargs)
 
         response.stream_to_file(output_path)
         return output_path
