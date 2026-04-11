@@ -6597,6 +6597,7 @@ class GatewayRunner:
             chat_id=context.source.chat_id,
             chat_name=context.source.chat_name or "",
             thread_id=str(context.source.thread_id) if context.source.thread_id else "",
+            session_key=context.session_key,
         )
 
     def _clear_session_env(self, tokens: list) -> None:
@@ -7335,8 +7336,8 @@ class GatewayRunner:
             # `_resolve_turn_agent_config(message, …)`.
             nonlocal message
 
-            # Pass session_key to process registry via env var so background
-            # processes can be mapped back to this gateway session
+            # session_key is now set via contextvars in _set_session_env()
+            # (concurrency-safe). Keep os.environ as fallback for CLI/cron.
             os.environ["HERMES_SESSION_KEY"] = session_key or ""
 
             # Read from env var or use default (same as CLI)
