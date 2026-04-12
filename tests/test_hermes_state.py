@@ -264,6 +264,111 @@ class TestMessageStorage:
 
 
 # =========================================================================
+# Multimodal content storage (text + image_url blocks)
+# =========================================================================
+
+class TestMultimodalContent:
+    """Tests for storing and round-tripping multimodal content blocks.
+
+    Vision-capable models receive content as a list of typed blocks
+    (text, image_url, input_image).  These tests verify that the DB
+    can persist and restore the structure losslessly while keeping
+    legacy plain-text content paths intact.
+    """
+
+    def test_multimodal_list_round_trips(self, db):
+        """A list of content blocks should survive write+read unchanged."""
+        db.create_session(session_id="s1", source="cli")
+        content = [
+            {"type": "text", "text": "What's wrong with this UI?"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/screenshot.png"}},
+        ]
+        db.append_message("s1", role="user", content=content)
+
+        conv = db.get_messages_as_conversation("s1")
+        assert len(conv) == 1
+        assert conv[0]["role"] == "user"
+        assert conv[0]["content"] == content
+
+    def test_multimodal_get_messages_round_trips(self, db):
+        """get_messages() must also restore multimodal content (not just _as_conversation)."""
+        db.create_session(session_id="s1", source="cli")
+        content = [
+            {"type": "text", "text": "Inspect this image:"},
+            {"type": "input_image", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+        ]
+        db.append_message("s1", role="user", content=content)
+
+        msgs = db.get_messages("s1")
+        assert len(msgs) == 1
+        assert msgs[0]["content"] == content
+
+    def test_plain_string_content_unchanged(self, db):
+        """Plain string content path must remain identical to legacy behavior."""
+        db.create_session(session_id="s1", source="cli")
+        db.append_message("s1", role="user", content="Just text, no images")
+
+        conv = db.get_messages_as_conversation("s1")
+        assert conv[0]["content"] == "Just text, no images"
+
+        msgs = db.get_messages("s1")
+        assert msgs[0]["content"] == "Just text, no images"
+
+    def test_multimodal_searchable_text_in_fts5(self, db):
+        """FTS5 must still find text from inside multimodal blocks."""
+        db.create_session(session_id="s1", source="cli")
+        content = [
+            {"type": "text", "text": "Help me debug this CSS layout"},
+            {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
+        ]
+        db.append_message("s1", role="user", content=content)
+
+        results = db.search_messages("CSS")
+        assert len(results) >= 1, "FTS5 should find 'CSS' even when content is multimodal"
+
+    def test_legacy_text_row_still_reads(self, db, tmp_path):
+        """A row inserted with raw TEXT content (no content_blocks) must still read correctly.
+
+        Simulates the migration case where existing DBs have plain-text
+        rows but no content_blocks column population.
+        """
+        db.create_session(session_id="s1", source="cli")
+        # Bypass append_message and insert directly as a "legacy" row
+        with db._lock:
+            db._conn.execute(
+                "INSERT INTO messages (session_id, role, content, timestamp, content_blocks) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("s1", "user", "Legacy plain text", time.time(), None),
+            )
+            db._conn.commit()
+
+        conv = db.get_messages_as_conversation("s1")
+        assert len(conv) == 1
+        assert conv[0]["content"] == "Legacy plain text"
+
+    def test_multimodal_with_audio_block(self, db):
+        """Audio blocks should be flattened to [audio] in searchable text."""
+        db.create_session(session_id="s1", source="cli")
+        content = [
+            {"type": "text", "text": "Listen to this:"},
+            {"type": "input_audio", "audio_url": {"url": "data:audio/wav;base64,UklGRg=="}},
+        ]
+        db.append_message("s1", role="user", content=content)
+
+        msgs = db.get_messages("s1")
+        assert msgs[0]["content"] == content
+
+    def test_none_content_round_trips(self, db):
+        """None content (e.g. assistant tool-only message) must round-trip as None."""
+        db.create_session(session_id="s1", source="cli")
+        db.append_message("s1", role="assistant", content=None,
+                          tool_calls=[{"id": "c1", "function": {"name": "x", "arguments": "{}"}}])
+
+        conv = db.get_messages_as_conversation("s1")
+        assert conv[0]["content"] is None
+
+
+# =========================================================================
 # FTS5 search
 # =========================================================================
 
@@ -935,7 +1040,7 @@ class TestSchemaInit:
     def test_schema_version(self, db):
         cursor = db._conn.execute("SELECT version FROM schema_version")
         version = cursor.fetchone()[0]
-        assert version == 6
+        assert version == 7
 
     def test_title_column_exists(self, db):
         """Verify the title column was created in the sessions table."""
@@ -991,12 +1096,12 @@ class TestSchemaInit:
         conn.commit()
         conn.close()
 
-        # Open with SessionDB — should migrate to v6
+        # Open with SessionDB — should migrate to current version
         migrated_db = SessionDB(db_path=db_path)
 
         # Verify migration
         cursor = migrated_db._conn.execute("SELECT version FROM schema_version")
-        assert cursor.fetchone()[0] == 6
+        assert cursor.fetchone()[0] == 7
 
         # Verify title column exists and is NULL for existing sessions
         session = migrated_db.get_session("existing")
@@ -1007,6 +1112,97 @@ class TestSchemaInit:
         assert migrated_db.set_session_title("existing", "Migrated Title") is True
         session = migrated_db.get_session("existing")
         assert session["title"] == "Migrated Title"
+
+        migrated_db.close()
+
+    def test_migration_adds_content_blocks_column(self, tmp_path):
+        """v6→v7 migration should add the content_blocks column to messages."""
+        import sqlite3
+
+        db_path = tmp_path / "v6_db.db"
+        conn = sqlite3.connect(str(db_path))
+        # Create a v6 schema (no content_blocks column).  Includes the
+        # superset of columns required by SCHEMA_SQL (parent_session_id,
+        # title, etc.) so the IF NOT EXISTS create script doesn't trip
+        # the trigger pre-flight.
+        conn.executescript("""
+            CREATE TABLE schema_version (version INTEGER NOT NULL);
+            INSERT INTO schema_version (version) VALUES (6);
+
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                user_id TEXT,
+                model TEXT,
+                model_config TEXT,
+                system_prompt TEXT,
+                parent_session_id TEXT,
+                started_at REAL NOT NULL,
+                ended_at REAL,
+                end_reason TEXT,
+                message_count INTEGER DEFAULT 0,
+                tool_call_count INTEGER DEFAULT 0,
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                title TEXT
+            );
+
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT,
+                tool_call_id TEXT,
+                tool_calls TEXT,
+                tool_name TEXT,
+                timestamp REAL NOT NULL,
+                token_count INTEGER,
+                finish_reason TEXT,
+                reasoning TEXT,
+                reasoning_details TEXT,
+                codex_reasoning_items TEXT
+            );
+        """)
+        conn.execute(
+            "INSERT INTO sessions (id, source, started_at) VALUES (?, ?, ?)",
+            ("legacy", "cli", 1000.0),
+        )
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+            ("legacy", "user", "old plain text", 1001.0),
+        )
+        conn.commit()
+        conn.close()
+
+        # Open with SessionDB — should run v7 migration
+        migrated_db = SessionDB(db_path=db_path)
+
+        cursor = migrated_db._conn.execute("SELECT version FROM schema_version")
+        assert cursor.fetchone()[0] == 7
+
+        # Verify content_blocks column exists
+        cursor = migrated_db._conn.execute("PRAGMA table_info(messages)")
+        columns = {row[1] for row in cursor.fetchall()}
+        assert "content_blocks" in columns
+
+        # Legacy plain-text content must still read correctly
+        conv = migrated_db.get_messages_as_conversation("legacy")
+        assert len(conv) == 1
+        assert conv[0]["content"] == "old plain text"
+
+        # New multimodal content must work after migration
+        migrated_db.create_session("new", "cli")
+        migrated_db.append_message(
+            "new",
+            role="user",
+            content=[
+                {"type": "text", "text": "Hello"},
+                {"type": "image_url", "image_url": {"url": "https://x.com/y.png"}},
+            ],
+        )
+        conv2 = migrated_db.get_messages_as_conversation("new")
+        assert isinstance(conv2[0]["content"], list)
+        assert len(conv2[0]["content"]) == 2
 
         migrated_db.close()
 

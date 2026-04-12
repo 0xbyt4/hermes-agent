@@ -31,7 +31,67 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+
+
+def _extract_searchable_text(content: Any) -> str:
+    """Flatten multimodal content to a plain text representation.
+
+    Used for the legacy ``content`` TEXT column so FTS5 search keeps
+    working when a message carries image/audio blocks alongside text.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+    parts: List[str] = []
+    for block in content:
+        if isinstance(block, str):
+            if block:
+                parts.append(block)
+            continue
+        if not isinstance(block, dict):
+            continue
+        btype = str(block.get("type", "") or "")
+        if btype in ("text", "input_text"):
+            text = block.get("text", "")
+            if isinstance(text, str) and text:
+                parts.append(text)
+        elif btype in ("image_url", "input_image", "image"):
+            parts.append("[image]")
+        elif btype in ("input_audio", "audio"):
+            parts.append("[audio]")
+    return " ".join(parts).strip()
+
+
+def _serialize_message_content(content: Any) -> tuple:
+    """Convert message content to a (text, blocks_json) DB tuple.
+
+    Plain string content is stored as-is in ``content`` for backwards
+    compat and FTS5 searchability.  Multimodal list/dict content is
+    stored both as a flattened searchable text in ``content`` AND as
+    JSON-serialized structure in ``content_blocks`` so it round-trips
+    losslessly on reload.
+    """
+    if content is None:
+        return None, None
+    if isinstance(content, str):
+        return content, None
+    if isinstance(content, (list, dict)):
+        return _extract_searchable_text(content), json.dumps(content)
+    return str(content), None
+
+
+def _deserialize_message_content(content_text: Any, content_blocks: Any) -> Any:
+    """Restore message content from DB row, preferring multimodal blocks."""
+    if content_blocks:
+        try:
+            return json.loads(content_blocks)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Failed to deserialize content_blocks, falling back to text")
+    return content_text
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -81,7 +141,8 @@ CREATE TABLE IF NOT EXISTS messages (
     finish_reason TEXT,
     reasoning TEXT,
     reasoning_details TEXT,
-    codex_reasoning_items TEXT
+    codex_reasoning_items TEXT,
+    content_blocks TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
@@ -329,6 +390,18 @@ class SessionDB:
                     except sqlite3.OperationalError:
                         pass  # Column already exists
                 cursor.execute("UPDATE schema_version SET version = 6")
+            if current_version < 7:
+                # v7: add content_blocks column to messages — stores
+                # JSON-serialized multimodal content (image_url/input_image
+                # blocks) so vision-capable models can round-trip native
+                # image content through session reload.  The plain text
+                # `content` column keeps a flattened representation for
+                # FTS5 searchability and backwards compat.
+                try:
+                    cursor.execute("ALTER TABLE messages ADD COLUMN content_blocks TEXT")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+                cursor.execute("UPDATE schema_version SET version = 7")
 
         # Unique title index — always ensure it exists (safe to run after migrations
         # since the title column is guaranteed to exist at this point)
@@ -792,7 +865,7 @@ class SessionDB:
         self,
         session_id: str,
         role: str,
-        content: str = None,
+        content: Any = None,
         tool_name: str = None,
         tool_calls: Any = None,
         tool_call_id: str = None,
@@ -804,6 +877,11 @@ class SessionDB:
     ) -> int:
         """
         Append a message to a session. Returns the message row ID.
+
+        Content may be a plain string or a multimodal list of content
+        blocks (text + image_url/input_image).  Multimodal content is
+        stored both as a flattened text in `content` (for FTS5 search)
+        and as JSON in `content_blocks` (for lossless round-trip).
 
         Also increments the session's message_count (and tool_call_count
         if role is 'tool' or tool_calls is present).
@@ -819,6 +897,9 @@ class SessionDB:
         )
         tool_calls_json = json.dumps(tool_calls) if tool_calls else None
 
+        # Split multimodal content into searchable text + JSON blocks
+        content_text, content_blocks_json = _serialize_message_content(content)
+
         # Pre-compute tool call count
         num_tool_calls = 0
         if tool_calls is not None:
@@ -828,12 +909,12 @@ class SessionDB:
             cursor = conn.execute(
                 """INSERT INTO messages (session_id, role, content, tool_call_id,
                    tool_calls, tool_name, timestamp, token_count, finish_reason,
-                   reasoning, reasoning_details, codex_reasoning_items)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   reasoning, reasoning_details, codex_reasoning_items, content_blocks)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
-                    content,
+                    content_text,
                     tool_call_id,
                     tool_calls_json,
                     tool_name,
@@ -843,6 +924,7 @@ class SessionDB:
                     reasoning,
                     reasoning_details_json,
                     codex_items_json,
+                    content_blocks_json,
                 ),
             )
             msg_id = cursor.lastrowid
@@ -880,6 +962,9 @@ class SessionDB:
                 except (json.JSONDecodeError, TypeError):
                     logger.warning("Failed to deserialize tool_calls in get_messages, falling back to []")
                     msg["tool_calls"] = []
+            # Restore multimodal content from content_blocks if present
+            content_blocks = msg.pop("content_blocks", None)
+            msg["content"] = _deserialize_message_content(msg.get("content"), content_blocks)
             result.append(msg)
         return result
 
@@ -891,14 +976,17 @@ class SessionDB:
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT role, content, tool_call_id, tool_calls, tool_name, "
-                "reasoning, reasoning_details, codex_reasoning_items "
+                "reasoning, reasoning_details, codex_reasoning_items, content_blocks "
                 "FROM messages WHERE session_id = ? ORDER BY timestamp, id",
                 (session_id,),
             )
             rows = cursor.fetchall()
         messages = []
         for row in rows:
-            msg = {"role": row["role"], "content": row["content"]}
+            msg = {
+                "role": row["role"],
+                "content": _deserialize_message_content(row["content"], row["content_blocks"]),
+            }
             if row["tool_call_id"]:
                 msg["tool_call_id"] = row["tool_call_id"]
             if row["tool_name"]:
