@@ -705,6 +705,81 @@ class TestVisionClientFallback:
         assert model == "claude-haiku-4-5-20251001"
 
 
+class TestTryOpenRouterBaseUrlOverride:
+    """Tests that ``_try_openrouter`` respects ``OPENROUTER_BASE_URL`` env override.
+
+    Without this override, users who route their OpenRouter API key
+    through an alternate endpoint (Nous Portal, custom OR-compatible
+    proxy) would see the auxiliary client silently call the canonical
+    openrouter.ai endpoint with the wrong key, get 401, and exhaust
+    the credential pool — eventually leading to vision_analyze being
+    silently de-registered from the agent's toolset.
+    """
+
+    def test_uses_env_base_url_override(self, monkeypatch):
+        """When OPENROUTER_BASE_URL is set, the constructed client uses it."""
+        from agent.auxiliary_client import _try_openrouter
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-key")
+        monkeypatch.setenv("OPENROUTER_BASE_URL", "https://custom.example.com/v1")
+        # Avoid the credential pool path by ensuring the pool is empty
+        monkeypatch.setattr(
+            "agent.auxiliary_client._select_pool_entry",
+            lambda provider: (False, None),
+        )
+        with patch("agent.auxiliary_client.OpenAI") as mock_openai:
+            mock_openai.return_value = MagicMock()
+            client, model = _try_openrouter()
+        assert client is not None
+        # The OpenAI client should have been built with the env override base URL
+        call_kwargs = mock_openai.call_args.kwargs
+        assert call_kwargs["base_url"] == "https://custom.example.com/v1"
+        assert call_kwargs["api_key"] == "sk-test-key"
+
+    def test_falls_back_to_hardcoded_default(self, monkeypatch):
+        """When OPENROUTER_BASE_URL is not set, the canonical endpoint is used."""
+        from agent.auxiliary_client import _try_openrouter
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-key")
+        monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
+        monkeypatch.setattr(
+            "agent.auxiliary_client._select_pool_entry",
+            lambda provider: (False, None),
+        )
+        with patch("agent.auxiliary_client.OpenAI") as mock_openai:
+            mock_openai.return_value = MagicMock()
+            client, model = _try_openrouter()
+        assert client is not None
+        call_kwargs = mock_openai.call_args.kwargs
+        assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
+
+    def test_no_api_key_returns_none(self, monkeypatch):
+        """No OPENROUTER_API_KEY → return (None, None) regardless of base URL."""
+        from agent.auxiliary_client import _try_openrouter
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.setenv("OPENROUTER_BASE_URL", "https://anything.example/v1")
+        monkeypatch.setattr(
+            "agent.auxiliary_client._select_pool_entry",
+            lambda provider: (False, None),
+        )
+        client, model = _try_openrouter()
+        assert client is None
+        assert model is None
+
+    def test_empty_env_base_url_falls_back_to_default(self, monkeypatch):
+        """Explicit empty OPENROUTER_BASE_URL='' should fall through to default."""
+        from agent.auxiliary_client import _try_openrouter
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-key")
+        monkeypatch.setenv("OPENROUTER_BASE_URL", "")
+        monkeypatch.setattr(
+            "agent.auxiliary_client._select_pool_entry",
+            lambda provider: (False, None),
+        )
+        with patch("agent.auxiliary_client.OpenAI") as mock_openai:
+            mock_openai.return_value = MagicMock()
+            client, model = _try_openrouter()
+        call_kwargs = mock_openai.call_args.kwargs
+        assert call_kwargs["base_url"] == "https://openrouter.ai/api/v1"
+
+
 class TestAuxiliaryPoolAwareness:
     def test_try_nous_uses_pool_entry(self):
         class _Entry:

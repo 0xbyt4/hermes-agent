@@ -786,15 +786,21 @@ def _try_openrouter() -> Tuple[Optional[OpenAI], Optional[str]]:
         if not or_key:
             return None, None
         base_url = _pool_runtime_base_url(entry, OPENROUTER_BASE_URL) or OPENROUTER_BASE_URL
-        logger.debug("Auxiliary client: OpenRouter via pool")
+        logger.debug("Auxiliary client: OpenRouter via pool (base_url=%s)", base_url)
         return OpenAI(api_key=or_key, base_url=base_url,
                        default_headers=_OR_HEADERS), _OPENROUTER_MODEL
 
     or_key = os.getenv("OPENROUTER_API_KEY")
     if not or_key:
         return None, None
-    logger.debug("Auxiliary client: OpenRouter")
-    return OpenAI(api_key=or_key, base_url=OPENROUTER_BASE_URL,
+    # Respect OPENROUTER_BASE_URL env override the same way the main agent
+    # path does. Without this, users who route their OpenRouter key through
+    # an alternate endpoint (Nous Portal, custom proxy, OR-compatible mirror)
+    # see the auxiliary client silently call the canonical openrouter.ai
+    # endpoint with the wrong key, get 401, and exhaust the credential pool.
+    or_base_url = os.getenv("OPENROUTER_BASE_URL") or OPENROUTER_BASE_URL
+    logger.debug("Auxiliary client: OpenRouter (base_url=%s)", or_base_url)
+    return OpenAI(api_key=or_key, base_url=or_base_url,
                    default_headers=_OR_HEADERS), _OPENROUTER_MODEL
 
 
