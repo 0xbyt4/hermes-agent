@@ -5956,11 +5956,50 @@ class AIAgent:
             return suffix
         return "[A multimodal message was converted to text for Anthropic compatibility.]"
 
+    def _model_supports_native_vision(self) -> bool:
+        """Return True if the active model has native vision per models.dev.
+
+        Result is cached on the agent for the lifetime of the (provider,
+        model) tuple to avoid repeated cache lookups across turns.
+
+        ``HERMES_FORCE_NATIVE_VISION=1`` forces True for users whose
+        model is not catalogued in models.dev but is known to support
+        vision (e.g. self-hosted vLLM serving Llama 3.2 Vision).
+        """
+        if os.environ.get("HERMES_FORCE_NATIVE_VISION") == "1":
+            return True
+
+        cache_key = (getattr(self, "provider", "") or "", getattr(self, "model", "") or "")
+        cached = getattr(self, "_native_vision_cache", None)
+        if cached is not None and cached.get("key") == cache_key:
+            return cached["value"]
+
+        result = False
+        try:
+            from agent.models_dev import get_model_capabilities
+            caps = get_model_capabilities(cache_key[0], cache_key[1])
+            if caps is not None:
+                result = bool(caps.supports_vision)
+        except Exception as exc:
+            logger.debug("Native vision capability lookup failed: %s", exc)
+
+        self._native_vision_cache = {"key": cache_key, "value": result}
+        return result
+
     def _prepare_anthropic_messages_for_api(self, api_messages: list) -> list:
         if not any(
             isinstance(msg, dict) and self._content_has_image_parts(msg.get("content"))
             for msg in api_messages
         ):
+            return api_messages
+
+        # Vision-capable Anthropic models (Claude 3+, Opus 4.6, Sonnet 4.6,
+        # etc.) handle image content blocks natively. The anthropic_adapter
+        # already converts image_url/input_image blocks into Anthropic's
+        # native {"type": "image", "source": ...} format. Skip the legacy
+        # vision_analyze fallback path for these models so the actual pixels
+        # reach the model instead of a lossy text description.
+        if self._model_supports_native_vision():
             return api_messages
 
         transformed = copy.deepcopy(api_messages)

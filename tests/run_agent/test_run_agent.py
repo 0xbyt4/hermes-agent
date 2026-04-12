@@ -3110,6 +3110,110 @@ class TestAnthropicImageFallback:
         assert mock_vision.await_count == 1
 
 
+class TestAnthropicNativeVision:
+    """Tests for capability-aware skip of the vision_analyze fallback.
+
+    When the active model has native vision support, the Anthropic
+    adapter handles image content blocks directly (line 829 in
+    anthropic_adapter.py).  The legacy preprocess that flattens images
+    to text descriptions should be skipped so the actual pixels reach
+    the model.
+    """
+
+    def test_model_supports_native_vision_caches_lookup(self, agent):
+        """Result is cached per (provider, model) tuple."""
+        agent.provider = "anthropic"
+        agent.model = "claude-opus-4-6"
+
+        with patch("agent.models_dev.get_model_capabilities") as mock_caps:
+            mock_caps.return_value = MagicMock(supports_vision=True)
+
+            assert agent._model_supports_native_vision() is True
+            assert agent._model_supports_native_vision() is True
+            # Lookup should only happen once
+            assert mock_caps.call_count == 1
+
+    def test_model_supports_native_vision_returns_false_when_unknown(self, agent):
+        """Unknown models default to False (safe legacy fallback)."""
+        agent.provider = "unknown"
+        agent.model = "fictional-model"
+        # Reset cache from any previous test
+        agent._native_vision_cache = None
+
+        with patch("agent.models_dev.get_model_capabilities", return_value=None):
+            assert agent._model_supports_native_vision() is False
+
+    def test_model_supports_native_vision_force_env_var(self, agent, monkeypatch):
+        """HERMES_FORCE_NATIVE_VISION=1 forces True regardless of lookup."""
+        monkeypatch.setenv("HERMES_FORCE_NATIVE_VISION", "1")
+        agent._native_vision_cache = None
+
+        with patch("agent.models_dev.get_model_capabilities", return_value=None):
+            assert agent._model_supports_native_vision() is True
+
+    def test_model_supports_native_vision_lookup_exception_safe(self, agent):
+        """If the capability lookup raises, return False (don't crash)."""
+        agent._native_vision_cache = None
+
+        with patch("agent.models_dev.get_model_capabilities", side_effect=RuntimeError("boom")):
+            assert agent._model_supports_native_vision() is False
+
+    def test_prepare_anthropic_skips_flatten_for_vision_capable_model(self, agent):
+        """Vision-capable models pass image blocks through unchanged."""
+        agent.api_mode = "anthropic_messages"
+        agent.provider = "anthropic"
+        agent.model = "claude-opus-4-6"
+        agent._native_vision_cache = None
+
+        api_messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's this?"},
+                {"type": "image_url", "image_url": {"url": "https://x.com/y.png"}},
+            ],
+        }]
+
+        with (
+            patch("agent.models_dev.get_model_capabilities",
+                  return_value=MagicMock(supports_vision=True)),
+            patch("tools.vision_tools.vision_analyze_tool") as mock_vision,
+        ):
+            result = agent._prepare_anthropic_messages_for_api(api_messages)
+
+        # vision_analyze_tool should NOT have been called
+        mock_vision.assert_not_called()
+        # Image content blocks should be preserved
+        assert isinstance(result[0]["content"], list)
+        assert any(b.get("type") in ("image_url", "input_image") for b in result[0]["content"])
+
+    def test_prepare_anthropic_still_flattens_when_no_vision(self, agent):
+        """Non-vision models still get the legacy text-flatten fallback."""
+        agent.api_mode = "anthropic_messages"
+        agent.provider = "anthropic"
+        agent.model = "claude-old-no-vision"
+        agent._native_vision_cache = None
+
+        api_messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's this?"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+            ],
+        }]
+
+        with (
+            patch("agent.models_dev.get_model_capabilities",
+                  return_value=MagicMock(supports_vision=False)),
+            patch("tools.vision_tools.vision_analyze_tool",
+                  new=AsyncMock(return_value=json.dumps({"success": True, "analysis": "A cat."}))),
+        ):
+            result = agent._prepare_anthropic_messages_for_api(api_messages)
+
+        # Content should now be a string (flattened)
+        assert isinstance(result[0]["content"], str)
+        assert "A cat." in result[0]["content"]
+
+
 class TestFallbackAnthropicProvider:
     """Bug fix: _try_activate_fallback had no case for anthropic provider."""
 
