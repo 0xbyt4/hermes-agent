@@ -7,7 +7,7 @@ sidebar_position: 7
 
 # Vision & Image Paste
 
-Hermes Agent supports **multimodal vision** — you can paste images from your clipboard directly into the CLI and ask the agent to analyze, describe, or work with them. Images are sent to the model as base64-encoded content blocks, so any vision-capable model can process them.
+Hermes Agent supports **multimodal vision** — you can paste images from your clipboard directly into the CLI and ask the agent to analyze, describe, or work with them. When the active model has native vision support, images are sent as base64-encoded content blocks so the model receives the actual pixels. Models without native vision automatically fall back to a text-description path that uses an auxiliary vision model to summarize each image.
 
 ## How It Works
 
@@ -15,11 +15,33 @@ Hermes Agent supports **multimodal vision** — you can paste images from your c
 2. Attach it using one of the methods below
 3. Type your question and press Enter
 4. The image appears as a `[📎 Image #1]` badge above the input
-5. On submit, the image is sent to the model as a vision content block
+5. On submit, Hermes checks the active model's capability:
+   - **Native vision** (Claude 3+, Opus 4.6, Sonnet 4.6, GPT-5.4, Gemini 2.5/3, Grok, Qwen-VL, Llava, etc.) → image sent as a typed content block
+   - **No native vision** → image goes through `vision_analyze` (auxiliary vision model produces a text description that gets prepended to your message)
 
 You can attach multiple images before sending — each gets its own badge. Press `Ctrl+C` to clear all attached images.
 
 Images are saved to `~/.hermes/images/` as PNG files with timestamped filenames.
+
+## Messaging Platforms (Telegram, Discord, Matrix, etc.)
+
+The same capability-aware routing applies when users send images to Hermes via messaging gateways:
+
+- Send a photo + caption to your Hermes bot on Telegram, Discord, Matrix, Signal, Feishu, Slack, WhatsApp, or any other supported platform
+- The gateway detects the active model for that session and either passes the image natively or falls back to the legacy text-description path
+- Image-bearing messages are persisted with their full multimodal structure so session reload preserves the visual context
+
+This means **webdev workflows work end-to-end through messaging**: drop a screenshot of a broken UI into Telegram, ask "what's wrong with this layout?", and Claude/GPT/Gemini sees the actual pixels — not a lossy text summary.
+
+## Self-Hosted & Uncatalogued Vision Models
+
+Capability detection uses [models.dev](https://models.dev) data. If you're running a self-hosted vision model (vLLM serving Llama 3.2 Vision, a custom multimodal model not yet in the catalog, etc.), set the env var to force native vision routing:
+
+```bash
+export HERMES_FORCE_NATIVE_VISION=1
+```
+
+When unset, Hermes auto-detects native support per model. When set to `1`, the gateway and CLI both treat the active model as vision-capable regardless of catalog state.
 
 ## Paste Methods
 
@@ -173,7 +195,11 @@ This is why Hermes uses a separate clipboard check — instead of receiving imag
 
 ## Supported Models
 
-Image paste works with any vision-capable model. The image is sent as a base64-encoded data URL in the OpenAI vision content format:
+Image input works with **any model** — Hermes routes the image differently based on the model's capability:
+
+### Native vision models (preferred path)
+
+Image is sent as an OpenAI-style `image_url` content block; the provider adapter converts to the right native format (Anthropic image blocks, OpenAI image_url, Codex input_image, etc.):
 
 ```json
 {
@@ -184,4 +210,10 @@ Image paste works with any vision-capable model. The image is sent as a base64-e
 }
 ```
 
-Most modern models support this format, including GPT-4 Vision, Claude (with vision), Gemini, and open-source multimodal models served through OpenRouter.
+Confirmed native vision support: Claude Opus 4.6, Sonnet 4.6, Haiku 4.5; GPT-5, GPT-5.4, GPT-4o; Gemini 2.5, Gemini 3 Flash; Grok 4; Qwen-VL; Llava and other open-source multimodal models served through OpenRouter or self-hosted endpoints.
+
+### Non-vision models (fallback path)
+
+For text-only models (older GPTs without vision, smaller open-source models, etc.), Hermes routes the image through the auxiliary vision model (default: Gemini Flash) to produce a text description. The description is prepended to your message so the main model can answer questions about the image, just less accurately than native vision and with the cost/latency of an extra LLM call.
+
+You can override the fallback vision model via `AUXILIARY_VISION_PROVIDER` / `AUXILIARY_VISION_MODEL` (see [environment variables](/docs/reference/environment-variables)).
