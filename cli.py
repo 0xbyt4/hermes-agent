@@ -3422,14 +3422,53 @@ class HermesCLI:
         elif _is_termux_environment():
             _cprint(f"  {_DIM}Tip: type your next message, or run hermes chat -q --image {_termux_example_image_path(image_path.name)} \"What do you see?\"{_RST}")
 
+    def _build_native_vision_content_cli(self, text: str, images: list) -> list:
+        """Build a multimodal content list (text + image_url blocks) for vision-capable models.
+
+        Used in place of ``_preprocess_images_with_vision`` when the active
+        model declares native vision support.  Reads each image into a
+        base64 data URL via the existing helper and emits OpenAI-style
+        ``image_url`` content blocks.  The provider adapter converts these
+        into the right native format (Anthropic image blocks, OpenAI
+        image_url, Codex input_image, etc.).
+
+        Bad image paths are skipped with a warning rather than failing the
+        whole submission.
+        """
+        from tools.vision_tools import _image_to_base64_data_url
+
+        blocks: list = []
+        if isinstance(text, str) and text:
+            blocks.append({"type": "text", "text": text})
+
+        for img_path in images:
+            if not img_path.exists():
+                _cprint(f"  {_DIM}⚠ image not found, skipping: {img_path.name}{_RST}")
+                continue
+            try:
+                data_url = _image_to_base64_data_url(img_path)
+            except Exception as exc:
+                _cprint(f"  {_DIM}⚠ failed to encode {img_path.name}: {exc}{_RST}")
+                continue
+            blocks.append({
+                "type": "image_url",
+                "image_url": {"url": data_url},
+            })
+
+        # If no images encoded successfully and no caption, fall back to a
+        # placeholder so the model isn't sent an empty message.
+        if not blocks:
+            return text or "What do you see in this image?"
+        return blocks
+
     def _preprocess_images_with_vision(self, text: str, images: list, *, announce: bool = True) -> str:
         """Analyze attached images via the vision tool and return enriched text.
 
-        Instead of embedding raw base64 ``image_url`` content parts in the
-        conversation (which only works with vision-capable models), this
-        pre-processes each image through the auxiliary vision model (Gemini
-        Flash) and prepends the descriptions to the user's message — the
-        same approach the messaging gateway uses.
+        Legacy fallback for non-vision models: each image goes through the
+        auxiliary vision model (Gemini Flash) and the resulting text
+        description gets prepended to the user's message.  Vision-capable
+        models should use ``_build_native_vision_content_cli`` instead so
+        the actual pixels reach the model.
 
         The local file path is included so the agent can re-examine the
         image later with ``vision_analyze`` if needed.
@@ -7467,13 +7506,24 @@ class HermesCLI:
         ):
             return None
         
-        # Pre-process images through the vision tool (Gemini Flash) so the
-        # main model receives text descriptions instead of raw base64 image
-        # content — works with any model, not just vision-capable ones.
+        # Image handling: vision-capable models get native multimodal
+        # content blocks (actual pixels reach the model); other models
+        # fall back to the vision_analyze text-description path.
         if images:
-            message = self._preprocess_images_with_vision(
-                message if isinstance(message, str) else "", images
-            )
+            _use_native = False
+            try:
+                if self.agent is not None:
+                    _use_native = self.agent._model_supports_native_vision()
+            except Exception as _exc:
+                logging.debug("CLI native vision capability check failed: %s", _exc)
+            if _use_native:
+                message = self._build_native_vision_content_cli(
+                    message if isinstance(message, str) else "", images
+                )
+            else:
+                message = self._preprocess_images_with_vision(
+                    message if isinstance(message, str) else "", images
+                )
 
         # Expand @ context references (e.g. @file:main.py, @diff, @folder:src/)
         if isinstance(message, str) and "@" in message:
