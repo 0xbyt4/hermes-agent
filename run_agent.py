@@ -5967,8 +5967,15 @@ class AIAgent:
         2. Direct lookup ``(provider, model)`` in models.dev catalog.
         3. Provider-prefix fallback: when the model name has a vendor
            prefix (``"anthropic/claude-sonnet-4.6"``) and the provider
-           itself isn't in the catalog (Nous, custom proxies, etc.),
-           split on ``/`` and try the upstream vendor's catalog instead.
+           itself isn't in the catalog, split on ``/`` and try the
+           upstream vendor's catalog instead.  Works for custom proxies
+           that pass through the direct vendor model name.
+        4. OpenRouter aggregator fallback: when the other paths fail
+           and the model name has a slash prefix, try the OpenRouter
+           catalog with the full slug.  Nous, custom OpenAI-compatible
+           proxies, and most aggregators use the same OpenRouter slug
+           format (``moonshotai/kimi-k2.5``, ``mistralai/mistral-small``)
+           so the OpenRouter catalog is a strong catch-all.
         """
         if os.environ.get("HERMES_FORCE_NATIVE_VISION") == "1":
             return True
@@ -5983,18 +5990,17 @@ class AIAgent:
         try:
             from agent.models_dev import get_model_capabilities
             caps = get_model_capabilities(provider, model)
-            if caps is not None:
-                result = bool(caps.supports_vision)
-            elif "/" in model:
-                # Provider-prefix fallback: aggregator routes (Nous,
-                # OpenRouter-style proxies) often pass through the
-                # upstream vendor name in the model slug.  Try resolving
-                # against the underlying vendor catalog so vision-capable
-                # upstream models still get the native path.
+            if caps is None and "/" in model:
+                # Fallback 1: upstream vendor catalog (for custom proxies
+                # where the model name already matches the vendor catalog).
                 vendor, vendor_model = model.split("/", 1)
                 caps = get_model_capabilities(vendor, vendor_model)
-                if caps is not None:
-                    result = bool(caps.supports_vision)
+            if caps is None and "/" in model and provider != "openrouter":
+                # Fallback 2: OpenRouter aggregator catalog. Nous and most
+                # custom proxies use OpenRouter-compatible slug format.
+                caps = get_model_capabilities("openrouter", model)
+            if caps is not None:
+                result = bool(caps.supports_vision)
         except Exception as exc:
             logger.debug("Native vision capability lookup failed: %s", exc)
 

@@ -6898,10 +6898,9 @@ class GatewayRunner:
         Resolution order:
         1. ``HERMES_FORCE_NATIVE_VISION=1`` → always True.
         2. Direct lookup ``(provider, model)`` in models.dev catalog.
-        3. Provider-prefix fallback: when the model name has a vendor
-           prefix (``"anthropic/claude-sonnet-4.6"``) and the provider
-           itself isn't catalogued (Nous, custom proxies), split on
-           ``/`` and try the upstream vendor's catalog.
+        3. Upstream vendor catalog fallback when model has a vendor slug.
+        4. OpenRouter aggregator catalog fallback (Nous and most custom
+           proxies share the OpenRouter slug format).
         """
         if os.environ.get("HERMES_FORCE_NATIVE_VISION") == "1":
             return True
@@ -6916,13 +6915,15 @@ class GatewayRunner:
         try:
             from agent.models_dev import get_model_capabilities
             caps = get_model_capabilities(provider, model)
-            if caps is not None:
-                return bool(caps.supports_vision)
-            if "/" in model:
+            if caps is None and "/" in model:
+                # Upstream vendor fallback
                 vendor, vendor_model = model.split("/", 1)
                 caps = get_model_capabilities(vendor, vendor_model)
-                if caps is not None:
-                    return bool(caps.supports_vision)
+            if caps is None and "/" in model and provider != "openrouter":
+                # OpenRouter aggregator catalog fallback
+                caps = get_model_capabilities("openrouter", model)
+            if caps is not None:
+                return bool(caps.supports_vision)
             return False
         except Exception as exc:
             logger.debug("native_vision: capability lookup failed for %s/%s: %s",

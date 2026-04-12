@@ -157,6 +157,24 @@ class TestShouldUseNativeVision:
         with patch("agent.models_dev.get_model_capabilities", return_value=None):
             assert runner._should_use_native_vision_for_source(MagicMock()) is False
 
+    def test_openrouter_catalog_fallback(self, runner, monkeypatch):
+        """When the direct and vendor-prefix lookups both fail, fall back
+        to querying the OpenRouter catalog with the full slug. Required
+        for aggregators where the upstream vendor catalog is empty (e.g.
+        moonshotai in models.dev) but the model is catalogued in OR."""
+        monkeypatch.delenv("HERMES_FORCE_NATIVE_VISION", raising=False)
+        runner._resolve_session_agent_runtime = MagicMock(
+            return_value=("moonshotai/kimi-k2.5", {"provider": "nous"})
+        )
+
+        def fake_caps(provider, model):
+            if provider == "openrouter" and model == "moonshotai/kimi-k2.5":
+                return MagicMock(supports_vision=True)
+            return None
+
+        with patch("agent.models_dev.get_model_capabilities", side_effect=fake_caps):
+            assert runner._should_use_native_vision_for_source(MagicMock()) is True
+
 
 # ---------------------------------------------------------------------------
 # _build_native_vision_content

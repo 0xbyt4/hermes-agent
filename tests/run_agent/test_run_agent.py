@@ -3254,6 +3254,61 @@ class TestAnthropicNativeVision:
         with patch("agent.models_dev.get_model_capabilities", return_value=None):
             assert agent._model_supports_native_vision() is False
 
+    def test_openrouter_catalog_fallback(self, agent):
+        """When the direct provider lookup and the vendor prefix strip
+        both fail, fall back to querying the OpenRouter catalog with the
+        full slug. Nous and most aggregators use OpenRouter-compatible
+        slugs so the OR catalog is a strong catch-all.
+        """
+        agent.provider = "nous"
+        agent.model = "moonshotai/kimi-k2.5"
+        agent._native_vision_cache = None
+
+        # Simulate the real situation: nous not mapped, moonshotai catalog
+        # empty, but openrouter catalog has the entry with vision=True.
+        def fake_caps(provider, model):
+            if provider == "openrouter" and model == "moonshotai/kimi-k2.5":
+                return MagicMock(supports_vision=True)
+            return None
+
+        with patch("agent.models_dev.get_model_capabilities", side_effect=fake_caps):
+            assert agent._model_supports_native_vision() is True
+
+    def test_openrouter_fallback_respects_non_vision_model(self, agent):
+        """If OpenRouter catalog says the model has no vision, return False."""
+        agent.provider = "nous"
+        agent.model = "moonshotai/kimi-k2"  # text-only variant
+        agent._native_vision_cache = None
+
+        def fake_caps(provider, model):
+            if provider == "openrouter" and model == "moonshotai/kimi-k2":
+                return MagicMock(supports_vision=False)
+            return None
+
+        with patch("agent.models_dev.get_model_capabilities", side_effect=fake_caps):
+            assert agent._model_supports_native_vision() is False
+
+    def test_openrouter_fallback_skipped_when_provider_is_openrouter(self, agent):
+        """If the provider is already 'openrouter', skip the redundant
+        second lookup — avoid infinite loop / wasted call."""
+        agent.provider = "openrouter"
+        agent.model = "moonshotai/kimi-k2.5"
+        agent._native_vision_cache = None
+
+        call_count = [0]
+        def fake_caps(provider, model):
+            call_count[0] += 1
+            return None
+
+        with patch("agent.models_dev.get_model_capabilities", side_effect=fake_caps):
+            agent._model_supports_native_vision()
+
+        # Exactly 2 calls: direct ("openrouter", "moonshotai/kimi-k2.5"),
+        # and the vendor prefix fallback ("moonshotai", "kimi-k2.5").
+        # The OpenRouter fallback must be skipped because provider is
+        # already openrouter.
+        assert call_count[0] == 2
+
 
 class TestFallbackAnthropicProvider:
     """Bug fix: _try_activate_fallback had no case for anthropic provider."""
