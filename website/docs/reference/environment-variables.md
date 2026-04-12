@@ -347,6 +347,7 @@ compression:
 | `AUXILIARY_VISION_MODEL` | Override model for vision tasks |
 | `AUXILIARY_VISION_BASE_URL` | Direct OpenAI-compatible endpoint for vision tasks |
 | `AUXILIARY_VISION_API_KEY` | API key paired with `AUXILIARY_VISION_BASE_URL` |
+| `HERMES_FORCE_NATIVE_VISION` | Force the gateway to send images as native multimodal content blocks even when the active model is not catalogued in models.dev. Set to `1` for self-hosted vision models (e.g. vLLM serving Llama 3.2 Vision) or new models not yet in the catalog. When unset, the gateway auto-detects native vision support and falls back to the `vision_analyze` text-description path for unknown or non-vision models. |
 | `AUXILIARY_WEB_EXTRACT_PROVIDER` | Override provider for web extraction/summarization |
 | `AUXILIARY_WEB_EXTRACT_MODEL` | Override model for web extraction/summarization |
 | `AUXILIARY_WEB_EXTRACT_BASE_URL` | Direct OpenAI-compatible endpoint for web extraction/summarization |
