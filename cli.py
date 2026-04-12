@@ -3422,42 +3422,49 @@ class HermesCLI:
         elif _is_termux_environment():
             _cprint(f"  {_DIM}Tip: type your next message, or run hermes chat -q --image {_termux_example_image_path(image_path.name)} \"What do you see?\"{_RST}")
 
-    def _build_native_vision_content_cli(self, text: str, images: list) -> list:
+    def _build_native_vision_content_cli(self, text: str, images: list):
         """Build a multimodal content list (text + image_url blocks) for vision-capable models.
 
         Used in place of ``_preprocess_images_with_vision`` when the active
-        model declares native vision support.  Reads each image into a
-        base64 data URL via the existing helper and emits OpenAI-style
-        ``image_url`` content blocks.  The provider adapter converts these
-        into the right native format (Anthropic image blocks, OpenAI
-        image_url, Codex input_image, etc.).
+        model declares native vision support.  Auto-resizes each image
+        if the encoded size would exceed the standard vision budget,
+        then emits OpenAI-style ``image_url`` content blocks with
+        ``detail: "auto"`` set explicitly so providers don't silently
+        default to "high" on large screenshots.  The provider adapter
+        converts these into the right native format (Anthropic image
+        blocks, OpenAI image_url, Codex input_image, etc.).
 
         Bad image paths are skipped with a warning rather than failing the
-        whole submission.
+        whole submission.  Returns a list of content blocks, or a plain
+        string (caption or placeholder) if every image fails.
         """
-        from tools.vision_tools import _image_to_base64_data_url
+        from tools.vision_tools import _resize_image_for_vision
 
         blocks: list = []
         if isinstance(text, str) and text:
             blocks.append({"type": "text", "text": text})
 
+        encoded_count = 0
         for img_path in images:
             if not img_path.exists():
                 _cprint(f"  {_DIM}⚠ image not found, skipping: {img_path.name}{_RST}")
                 continue
             try:
-                data_url = _image_to_base64_data_url(img_path)
+                # Auto-resizes if the encoded size exceeds the standard
+                # ~5MB budget. Returns a ready-to-send data URL.
+                data_url = _resize_image_for_vision(img_path)
             except Exception as exc:
                 _cprint(f"  {_DIM}⚠ failed to encode {img_path.name}: {exc}{_RST}")
                 continue
             blocks.append({
                 "type": "image_url",
-                "image_url": {"url": data_url},
+                "image_url": {"url": data_url, "detail": "auto"},
             })
+            encoded_count += 1
 
-        # If no images encoded successfully and no caption, fall back to a
-        # placeholder so the model isn't sent an empty message.
-        if not blocks:
+        # If no images encoded successfully, fall back to the caption
+        # text or a placeholder so the model isn't sent an empty message.
+        if encoded_count == 0:
             return text or "What do you see in this image?"
         return blocks
 
@@ -7517,10 +7524,18 @@ class HermesCLI:
             except Exception as _exc:
                 logging.debug("CLI native vision capability check failed: %s", _exc)
             if _use_native:
+                logging.info(
+                    "[vision] route=native model=%s images=%d",
+                    self.model, len(images),
+                )
                 message = self._build_native_vision_content_cli(
                     message if isinstance(message, str) else "", images
                 )
             else:
+                logging.info(
+                    "[vision] route=legacy_analyze model=%s images=%d",
+                    self.model, len(images),
+                )
                 message = self._preprocess_images_with_vision(
                     message if isinstance(message, str) else "", images
                 )

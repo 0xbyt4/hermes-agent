@@ -206,12 +206,20 @@ class TestBuildNativeVisionContent:
         assert len(image_blocks) == 2
 
     def test_skips_unreadable_images(self, runner, tmp_path):
-        """Bad image path is skipped, doesn't crash the build."""
+        """Bad image path is skipped; caption-only fallback returns a string
+        rather than a list with a single text block (a list with no images
+        has no reason to exist as a list)."""
         bad_path = tmp_path / "nonexistent.png"
         result = runner._build_native_vision_content("hi", [str(bad_path)])
-        # Text block remains, no image block
+        # No images encoded → fall back to plain string caption
+        assert result == "hi"
+
+    def test_image_url_includes_detail_auto(self, runner, png_file):
+        """Emitted image_url blocks must set ``detail: "auto"`` explicitly
+        so providers don't silently default to "high" on large screenshots
+        and inflate the bill."""
+        result = runner._build_native_vision_content("what's this?", [str(png_file)])
         assert isinstance(result, list)
-        text_blocks = [b for b in result if b.get("type") == "text"]
-        assert len(text_blocks) == 1
         image_blocks = [b for b in result if b.get("type") == "image_url"]
-        assert len(image_blocks) == 0
+        assert len(image_blocks) == 1
+        assert image_blocks[0]["image_url"]["detail"] == "auto"

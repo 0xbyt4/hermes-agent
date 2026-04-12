@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, Union
 
 # ---------------------------------------------------------------------------
 # SSL certificate auto-detection for NixOS and other non-standard systems.
@@ -2973,10 +2973,20 @@ class GatewayRunner:
                     # actual pixels reach the model instead of a lossy text
                     # description.  Models that don't declare native vision
                     # support fall through to the legacy text-flatten path.
+                    logger.info(
+                        "[vision] route=native platform=%s images=%d",
+                        source.platform.value if source.platform else "?",
+                        len(image_paths),
+                    )
                     message_text = self._build_native_vision_content(
                         message_text, image_paths,
                     )
                 else:
+                    logger.info(
+                        "[vision] route=legacy_analyze platform=%s images=%d",
+                        source.platform.value if source.platform else "?",
+                        len(image_paths),
+                    )
                     message_text = await self._enrich_message_with_vision(
                         message_text,
                         image_paths,
@@ -6934,18 +6944,22 @@ class GatewayRunner:
         self,
         user_text: str,
         image_paths: List[str],
-    ) -> List[Dict[str, Any]]:
+    ) -> Union[str, List[Dict[str, Any]]]:
         """Build a multimodal content list for vision-capable models.
 
-        Reads each image into a base64 data URL and emits an OpenAI-style
-        ``image_url`` content block.  The agent's provider adapter
-        converts these into the right native format (Anthropic image
-        blocks, OpenAI image_url, Codex input_image, etc.).
+        Reads each image into a base64 data URL (auto-resizing if the
+        encoded size would exceed the vision tool's standard budget)
+        and emits an OpenAI-style ``image_url`` content block with
+        ``detail: "auto"`` set explicitly so providers don't silently
+        default to "high" for large screenshots and balloon the bill.
 
         The user's caption text is included as the first block when
         non-empty so the model has a prompt alongside the images.
+
+        Returns a list of content blocks normally, or a plain string
+        (the caption, or empty) when every image fails to encode.
         """
-        from tools.vision_tools import _image_to_base64_data_url
+        from tools.vision_tools import _resize_image_for_vision
 
         blocks: List[Dict[str, Any]] = []
         if user_text:
@@ -6953,7 +6967,9 @@ class GatewayRunner:
 
         for path in image_paths:
             try:
-                data_url = _image_to_base64_data_url(Path(path))
+                # Auto-resizes if the encoded size exceeds the standard
+                # ~5MB budget. Returns a ready-to-send data URL.
+                data_url = _resize_image_for_vision(Path(path))
             except Exception as exc:
                 logger.warning(
                     "native_vision: failed to encode %s, skipping image: %s",
@@ -6962,13 +6978,13 @@ class GatewayRunner:
                 continue
             blocks.append({
                 "type": "image_url",
-                "image_url": {"url": data_url},
+                "image_url": {"url": data_url, "detail": "auto"},
             })
 
-        # If no images encoded successfully and no caption, fall back to
-        # an empty string so downstream callers handle it normally.
-        if not blocks:
-            return ""  # type: ignore[return-value]
+        # If no images encoded successfully, fall back to the caption
+        # text (or empty string) so downstream callers handle it normally.
+        if len(blocks) <= (1 if user_text else 0):
+            return user_text or ""
         return blocks
 
     async def _enrich_message_with_vision(

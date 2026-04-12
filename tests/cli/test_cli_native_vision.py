@@ -67,14 +67,14 @@ class TestBuildNativeVisionContentCli:
         assert len(image_blocks) == 3
 
     def test_skips_missing_image(self, tmp_path):
+        """Bad image path is skipped; caption-only fallback returns a
+        plain string rather than a list with only a text block."""
         cli_obj = _make_cli()
         bad = tmp_path / "missing.png"
         with patch("cli._cprint"):
             result = cli_obj._build_native_vision_content_cli("hi", [bad])
-        # No image block, but text remains as a list with the text block
-        assert isinstance(result, list)
-        assert any(b.get("type") == "text" for b in result)
-        assert not any(b.get("type") == "image_url" for b in result)
+        # No images encoded → fall back to plain string
+        assert result == "hi"
 
     def test_falls_back_to_string_when_nothing_to_send(self, tmp_path):
         """Empty caption + all-bad images returns a placeholder string."""
@@ -85,6 +85,15 @@ class TestBuildNativeVisionContentCli:
         # Falls back to placeholder text rather than empty list
         assert isinstance(result, str)
         assert "image" in result.lower()
+
+    def test_image_url_includes_detail_auto(self, png_file):
+        """CLI must also set ``detail: "auto"`` on image_url blocks."""
+        cli_obj = _make_cli()
+        result = cli_obj._build_native_vision_content_cli("look", [png_file])
+        assert isinstance(result, list)
+        image_blocks = [b for b in result if b.get("type") == "image_url"]
+        assert len(image_blocks) == 1
+        assert image_blocks[0]["image_url"]["detail"] == "auto"
 
 
 # ---------------------------------------------------------------------------
