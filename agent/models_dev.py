@@ -347,7 +347,16 @@ def _get_provider_models(provider: str) -> Optional[Dict[str, Any]]:
 
 
 def _find_model_entry(models: Dict[str, Any], model: str) -> Optional[Dict[str, Any]]:
-    """Find a model entry by exact match, then case-insensitive fallback."""
+    """Find a model entry by exact match, then case-insensitive fallback,
+    then dot/hyphen-normalized match.
+
+    Different catalogs use different conventions for version separators:
+    Anthropic's catalog spells the latest Sonnet as ``claude-sonnet-4-6``
+    (hyphens) while OpenRouter's catalog uses ``anthropic/claude-sonnet-4.6``
+    (dots).  Users typing either form should resolve to the same entry,
+    so we try a normalized version where dots and hyphens are
+    interchangeable.
+    """
     # Exact match
     entry = models.get(model)
     if isinstance(entry, dict):
@@ -357,6 +366,17 @@ def _find_model_entry(models: Dict[str, Any], model: str) -> Optional[Dict[str, 
     model_lower = model.lower()
     for mid, mdata in models.items():
         if mid.lower() == model_lower and isinstance(mdata, dict):
+            return mdata
+
+    # Dot/hyphen normalized match: collapse both dots and hyphens to a
+    # single separator and compare. ``claude-sonnet-4.6`` and
+    # ``claude-sonnet-4-6`` both normalize to ``claude_sonnet_4_6``.
+    def _norm(s: str) -> str:
+        return s.lower().replace(".", "_").replace("-", "_")
+
+    target = _norm(model)
+    for mid, mdata in models.items():
+        if _norm(mid) == target and isinstance(mdata, dict):
             return mdata
 
     return None

@@ -6895,8 +6895,13 @@ class GatewayRunner:
         runtime so the gateway routes images consistently with the model
         the agent will use for this turn.
 
-        ``HERMES_FORCE_NATIVE_VISION=1`` forces True for users on
-        self-hosted vision models that aren't catalogued in models.dev.
+        Resolution order:
+        1. ``HERMES_FORCE_NATIVE_VISION=1`` → always True.
+        2. Direct lookup ``(provider, model)`` in models.dev catalog.
+        3. Provider-prefix fallback: when the model name has a vendor
+           prefix (``"anthropic/claude-sonnet-4.6"``) and the provider
+           itself isn't catalogued (Nous, custom proxies), split on
+           ``/`` and try the upstream vendor's catalog.
         """
         if os.environ.get("HERMES_FORCE_NATIVE_VISION") == "1":
             return True
@@ -6911,7 +6916,14 @@ class GatewayRunner:
         try:
             from agent.models_dev import get_model_capabilities
             caps = get_model_capabilities(provider, model)
-            return bool(caps and caps.supports_vision)
+            if caps is not None:
+                return bool(caps.supports_vision)
+            if "/" in model:
+                vendor, vendor_model = model.split("/", 1)
+                caps = get_model_capabilities(vendor, vendor_model)
+                if caps is not None:
+                    return bool(caps.supports_vision)
+            return False
         except Exception as exc:
             logger.debug("native_vision: capability lookup failed for %s/%s: %s",
                          provider, model, exc)

@@ -284,3 +284,60 @@ class TestGetModelCapabilities:
         with patch("agent.models_dev.fetch_models_dev", return_value=CAPS_REGISTRY):
             caps = get_model_capabilities("anthropic", "nonexistent-model")
         assert caps is None
+
+
+class TestModelNameDotHyphenNormalization:
+    """Tests for dot/hyphen-tolerant model name matching.
+
+    Different catalogs use different separators between model name and
+    version: Anthropic stores ``claude-sonnet-4-6`` (hyphens) while
+    OpenRouter stores ``anthropic/claude-sonnet-4.6`` (dots). Users
+    should be able to query either form and resolve to the same entry.
+    """
+
+    REGISTRY = {
+        "anthropic": {
+            "id": "anthropic",
+            "models": {
+                "claude-sonnet-4-6": {
+                    "id": "claude-sonnet-4-6",
+                    "attachment": True,
+                    "tool_call": True,
+                    "limit": {"context": 200000, "output": 64000},
+                },
+                "claude-opus-4-6": {
+                    "id": "claude-opus-4-6",
+                    "attachment": True,
+                    "tool_call": True,
+                    "limit": {"context": 200000, "output": 32000},
+                },
+            },
+        },
+    }
+
+    def test_dot_query_matches_hyphen_catalog(self):
+        """``claude-sonnet-4.6`` should match ``claude-sonnet-4-6``."""
+        with patch("agent.models_dev.fetch_models_dev", return_value=self.REGISTRY):
+            caps = get_model_capabilities("anthropic", "claude-sonnet-4.6")
+        assert caps is not None
+        assert caps.supports_vision is True
+
+    def test_hyphen_query_still_works(self):
+        """Backwards compat: existing ``claude-sonnet-4-6`` queries unchanged."""
+        with patch("agent.models_dev.fetch_models_dev", return_value=self.REGISTRY):
+            caps = get_model_capabilities("anthropic", "claude-sonnet-4-6")
+        assert caps is not None
+        assert caps.supports_vision is True
+
+    def test_uppercase_dot_query_matches(self):
+        """Case-insensitive normalization combines with dot/hyphen handling."""
+        with patch("agent.models_dev.fetch_models_dev", return_value=self.REGISTRY):
+            caps = get_model_capabilities("anthropic", "Claude-Opus-4.6")
+        assert caps is not None
+        assert caps.supports_vision is True
+
+    def test_unrelated_model_still_returns_none(self):
+        """Normalization shouldn't cause spurious matches across families."""
+        with patch("agent.models_dev.fetch_models_dev", return_value=self.REGISTRY):
+            caps = get_model_capabilities("anthropic", "claude-haiku-3.5")
+        assert caps is None

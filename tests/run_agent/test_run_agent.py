@@ -3213,6 +3213,47 @@ class TestAnthropicNativeVision:
         assert isinstance(result[0]["content"], str)
         assert "A cat." in result[0]["content"]
 
+    def test_provider_prefix_fallback_for_unmapped_provider(self, agent):
+        """Aggregator providers (Nous, custom proxies) that aren't in
+        models.dev should still resolve via the upstream vendor when the
+        model name has a vendor prefix like ``anthropic/claude-sonnet-4.6``.
+        """
+        agent.provider = "nous"
+        agent.model = "anthropic/claude-sonnet-4.6"
+        agent._native_vision_cache = None
+
+        # First call (provider="nous") returns None — provider not catalogued.
+        # Second call (provider="anthropic", model="claude-sonnet-4.6") returns vision-capable.
+        def fake_caps(provider, model):
+            if provider == "anthropic" and model == "claude-sonnet-4.6":
+                return MagicMock(supports_vision=True)
+            return None
+
+        with patch("agent.models_dev.get_model_capabilities", side_effect=fake_caps):
+            assert agent._model_supports_native_vision() is True
+
+    def test_provider_prefix_fallback_no_slash_returns_false(self, agent):
+        """If model has no slash prefix, fallback shouldn't trigger."""
+        agent.provider = "unknown"
+        agent.model = "plain-model-name"
+        agent._native_vision_cache = None
+
+        with patch("agent.models_dev.get_model_capabilities", return_value=None):
+            assert agent._model_supports_native_vision() is False
+
+    def test_provider_prefix_fallback_unknown_vendor_returns_false(self):
+        """If both the provider AND the upstream vendor are unknown,
+        the result is False (safe legacy fallback)."""
+        from run_agent import AIAgent
+        # Use object.__new__ to skip __init__ side effects
+        agent = object.__new__(AIAgent)
+        agent.provider = "nous"
+        agent.model = "fictional/never-heard-of-it"
+        agent._native_vision_cache = None
+
+        with patch("agent.models_dev.get_model_capabilities", return_value=None):
+            assert agent._model_supports_native_vision() is False
+
 
 class TestFallbackAnthropicProvider:
     """Bug fix: _try_activate_fallback had no case for anthropic provider."""

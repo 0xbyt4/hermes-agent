@@ -5962,9 +5962,13 @@ class AIAgent:
         Result is cached on the agent for the lifetime of the (provider,
         model) tuple to avoid repeated cache lookups across turns.
 
-        ``HERMES_FORCE_NATIVE_VISION=1`` forces True for users whose
-        model is not catalogued in models.dev but is known to support
-        vision (e.g. self-hosted vLLM serving Llama 3.2 Vision).
+        Resolution order:
+        1. ``HERMES_FORCE_NATIVE_VISION=1`` env var → always True.
+        2. Direct lookup ``(provider, model)`` in models.dev catalog.
+        3. Provider-prefix fallback: when the model name has a vendor
+           prefix (``"anthropic/claude-sonnet-4.6"``) and the provider
+           itself isn't in the catalog (Nous, custom proxies, etc.),
+           split on ``/`` and try the upstream vendor's catalog instead.
         """
         if os.environ.get("HERMES_FORCE_NATIVE_VISION") == "1":
             return True
@@ -5974,12 +5978,23 @@ class AIAgent:
         if cached is not None and cached.get("key") == cache_key:
             return cached["value"]
 
+        provider, model = cache_key
         result = False
         try:
             from agent.models_dev import get_model_capabilities
-            caps = get_model_capabilities(cache_key[0], cache_key[1])
+            caps = get_model_capabilities(provider, model)
             if caps is not None:
                 result = bool(caps.supports_vision)
+            elif "/" in model:
+                # Provider-prefix fallback: aggregator routes (Nous,
+                # OpenRouter-style proxies) often pass through the
+                # upstream vendor name in the model slug.  Try resolving
+                # against the underlying vendor catalog so vision-capable
+                # upstream models still get the native path.
+                vendor, vendor_model = model.split("/", 1)
+                caps = get_model_capabilities(vendor, vendor_model)
+                if caps is not None:
+                    result = bool(caps.supports_vision)
         except Exception as exc:
             logger.debug("Native vision capability lookup failed: %s", exc)
 

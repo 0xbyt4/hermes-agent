@@ -127,6 +127,36 @@ class TestShouldUseNativeVision:
         runner._resolve_session_agent_runtime = MagicMock(side_effect=RuntimeError("boom"))
         assert runner._should_use_native_vision_for_source(MagicMock()) is False
 
+    def test_provider_prefix_fallback_for_aggregator_provider(self, runner, monkeypatch):
+        """Aggregator providers (Nous, custom proxies) not in models.dev
+        should still resolve via the upstream vendor in the model slug."""
+        monkeypatch.delenv("HERMES_FORCE_NATIVE_VISION", raising=False)
+        runner._resolve_session_agent_runtime = MagicMock(
+            return_value=("anthropic/claude-sonnet-4.6", {"provider": "nous"})
+        )
+
+        def fake_caps(provider, model):
+            # First call: provider=nous → not catalogued
+            if provider == "nous":
+                return None
+            # Second call: provider=anthropic + dotted model → vision-capable
+            if provider == "anthropic" and model == "claude-sonnet-4.6":
+                return MagicMock(supports_vision=True)
+            return None
+
+        with patch("agent.models_dev.get_model_capabilities", side_effect=fake_caps):
+            assert runner._should_use_native_vision_for_source(MagicMock()) is True
+
+    def test_provider_prefix_fallback_unknown_vendor(self, runner, monkeypatch):
+        """If both the aggregator AND the upstream vendor are unknown,
+        return False (safe legacy fallback)."""
+        monkeypatch.delenv("HERMES_FORCE_NATIVE_VISION", raising=False)
+        runner._resolve_session_agent_runtime = MagicMock(
+            return_value=("fictional/never-heard-of-it", {"provider": "custom"})
+        )
+        with patch("agent.models_dev.get_model_capabilities", return_value=None):
+            assert runner._should_use_native_vision_for_source(MagicMock()) is False
+
 
 # ---------------------------------------------------------------------------
 # _build_native_vision_content
