@@ -1056,9 +1056,88 @@ def estimate_tokens_rough(text: str) -> int:
     return (len(text) + 3) // 4
 
 
+# Approximate character budgets for non-text content blocks. Expressed
+# in characters because the rough estimator divides by 4 to get tokens.
+# - Image: ~1500 tokens average across providers (Anthropic ~1500,
+#   OpenAI ~85-1500 per tile, Gemini ~258). 6000 chars ≈ 1500 tokens.
+# - Audio: ~500 tokens per segment is a sane upper bound for most STT.
+_IMAGE_CONTENT_CHARS = 6000
+_AUDIO_CONTENT_CHARS = 2000
+
+
+def count_message_chars(msg: Any) -> int:
+    """Count characters in a message, skipping base64 image/audio payloads.
+
+    Multimodal messages can carry data: URLs that contain hundreds of
+    KB of base64. ``len(str(msg))`` would count every base64 character
+    as a billable text character, which inflates the token estimate by
+    100-300x and causes the compressor to wipe vision turns immediately
+    or trip false context-overflow checks.
+
+    Walks the structure: counts text fields directly, applies fixed
+    per-image / per-audio budgets, and falls back to ``len(str(value))``
+    for unrecognized scalar fields.
+    """
+    if msg is None:
+        return 0
+    if isinstance(msg, str):
+        return len(msg)
+    if not isinstance(msg, dict):
+        return len(str(msg))
+
+    total = 0
+    content = msg.get("content")
+    if isinstance(content, str):
+        total += len(content)
+    elif isinstance(content, list):
+        for block in content:
+            if isinstance(block, str):
+                total += len(block)
+                continue
+            if not isinstance(block, dict):
+                total += len(str(block))
+                continue
+            btype = str(block.get("type", "") or "")
+            if btype in ("text", "input_text"):
+                text = block.get("text", "")
+                if isinstance(text, str):
+                    total += len(text)
+            elif btype in ("image_url", "input_image", "image"):
+                total += _IMAGE_CONTENT_CHARS
+            elif btype in ("input_audio", "audio"):
+                total += _AUDIO_CONTENT_CHARS
+            else:
+                # Unknown block — count its serialized form, but skip
+                # any data: URL payloads to stay safe.
+                total += sum(
+                    len(str(v)) for k, v in block.items()
+                    if k != "image_url" and not (
+                        isinstance(v, str) and v.startswith("data:")
+                    )
+                )
+
+    # Account for role + tool plumbing fields (small but non-zero).
+    for key in ("role", "tool_call_id", "tool_name", "name"):
+        v = msg.get(key)
+        if isinstance(v, str):
+            total += len(v)
+
+    tool_calls = msg.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function", {})
+            if isinstance(fn, dict):
+                total += len(str(fn.get("name", "")))
+                total += len(str(fn.get("arguments", "")))
+
+    return total
+
+
 def estimate_messages_tokens_rough(messages: List[Dict[str, Any]]) -> int:
     """Rough token estimate for a message list (pre-flight only)."""
-    total_chars = sum(len(str(msg)) for msg in messages)
+    total_chars = sum(count_message_chars(msg) for msg in messages)
     return (total_chars + 3) // 4
 
 
@@ -1079,7 +1158,7 @@ def estimate_request_tokens_rough(
     if system_prompt:
         total_chars += len(system_prompt)
     if messages:
-        total_chars += sum(len(str(msg)) for msg in messages)
+        total_chars += sum(count_message_chars(msg) for msg in messages)
     if tools:
         total_chars += len(str(tools))
     return (total_chars + 3) // 4

@@ -86,6 +86,7 @@ from agent.prompt_builder import (
 from agent.model_metadata import (
     fetch_model_metadata,
     estimate_tokens_rough, estimate_messages_tokens_rough, estimate_request_tokens_rough,
+    count_message_chars,
     get_next_probe_tier, parse_context_limit_from_error,
     parse_available_output_tokens_from_error,
     save_context_length, is_local_endpoint,
@@ -8024,8 +8025,10 @@ class AIAgent:
                     new_tcs.append(tc)
                 am["tool_calls"] = new_tcs
 
-            # Calculate approximate request size for logging
-            total_chars = sum(len(str(msg)) for msg in api_messages)
+            # Calculate approximate request size for logging.  Skips
+            # base64 image/audio payloads so multimodal turns don't
+            # report inflated char counts.
+            total_chars = sum(count_message_chars(msg) for msg in api_messages)
             approx_tokens = estimate_messages_tokens_rough(api_messages)
             
             # Thinking spinner for quiet mode (animated during API call)

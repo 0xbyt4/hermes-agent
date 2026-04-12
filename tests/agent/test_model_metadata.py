@@ -23,8 +23,10 @@ from agent.model_metadata import (
     CONTEXT_PROBE_TIERS,
     DEFAULT_CONTEXT_LENGTHS,
     _strip_provider_prefix,
+    count_message_chars,
     estimate_tokens_rough,
     estimate_messages_tokens_rough,
+    estimate_request_tokens_rough,
     get_model_context_length,
     get_next_probe_tier,
     get_cached_context_length,
@@ -68,13 +70,12 @@ class TestEstimateMessagesTokensRough:
     def test_empty_list(self):
         assert estimate_messages_tokens_rough([]) == 0
 
-    def test_single_message_concrete_value(self):
-        """Verify against known str(msg) length (ceiling division)."""
+    def test_single_message_plain_text(self):
+        """Plain text content: ≈ len(content) + len(role)."""
         msg = {"role": "user", "content": "a" * 400}
         result = estimate_messages_tokens_rough([msg])
-        n = len(str(msg))
-        expected = (n + 3) // 4
-        assert result == expected
+        # Counts content (400) + role ("user", 4) = 404 chars → ~101 tokens
+        assert result == (404 + 3) // 4
 
     def test_multiple_messages_additive(self):
         msgs = [
@@ -82,9 +83,8 @@ class TestEstimateMessagesTokensRough:
             {"role": "assistant", "content": "Hi there, how can I help?"},
         ]
         result = estimate_messages_tokens_rough(msgs)
-        n = sum(len(str(m)) for m in msgs)
-        expected = (n + 3) // 4
-        assert result == expected
+        # user(4) + Hello(5) + assistant(9) + Hi there...(25) = 43
+        assert result == (43 + 3) // 4
 
     def test_tool_call_message(self):
         """Tool call messages with no 'content' key still contribute tokens."""
@@ -92,16 +92,134 @@ class TestEstimateMessagesTokensRough:
                "tool_calls": [{"id": "1", "function": {"name": "terminal", "arguments": "{}"}}]}
         result = estimate_messages_tokens_rough([msg])
         assert result > 0
-        assert result == (len(str(msg)) + 3) // 4
+        # role(9) + name(8) + args(2) = 19 chars → 5 tokens
+        assert result == (19 + 3) // 4
 
-    def test_message_with_list_content(self):
-        """Vision messages with multimodal content arrays."""
+    def test_message_with_text_only_list_content(self):
+        """List content with only text blocks should count just the text."""
         msg = {"role": "user", "content": [
-            {"type": "text", "text": "describe"},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+            {"type": "text", "text": "describe this"},
         ]}
         result = estimate_messages_tokens_rough([msg])
-        assert result == (len(str(msg)) + 3) // 4
+        # role(4) + text(13) = 17 chars → 5 tokens
+        assert result == (17 + 3) // 4
+
+
+class TestCountMessageCharsMultimodal:
+    """Tests for the multimodal-aware char counter (Bug fix #2).
+
+    Before the fix, ``len(str(msg))`` counted base64 image data as text,
+    which inflated token estimates by 100-300x for vision turns and
+    caused the context compressor to wipe images aggressively or trip
+    false context-overflow checks.
+    """
+
+    def test_image_url_block_uses_fixed_budget_not_base64_length(self):
+        """A 1MB base64 image should not contribute >6KB to the char count."""
+        # Simulate a 1MB base64 image payload (roughly real-world)
+        big_base64 = "A" * (1024 * 1024)
+        msg = {"role": "user", "content": [
+            {"type": "text", "text": "What's in this image?"},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{big_base64}"}},
+        ]}
+        chars = count_message_chars(msg)
+        # Plain text counter would give ~1M+ chars → ~262K tokens
+        # With per-image budget, we should be far smaller
+        assert chars < 10_000, (
+            f"image_url block should not count base64 data; got {chars} chars"
+        )
+        # Sanity: should still include the text + image budget
+        assert chars > 6000  # at least the image budget
+
+    def test_input_image_block_uses_fixed_budget(self):
+        """input_image type (Codex/OpenAI Responses API) also gets budget."""
+        big_base64 = "A" * 500_000
+        msg = {"role": "user", "content": [
+            {"type": "input_image", "image_url": {"url": f"data:image/jpeg;base64,{big_base64}"}},
+        ]}
+        chars = count_message_chars(msg)
+        assert chars < 10_000
+        assert chars >= 6000
+
+    def test_anthropic_image_block(self):
+        """Anthropic-native ``image`` block type also gets budget."""
+        msg = {"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "data": "X" * 200_000}},
+        ]}
+        chars = count_message_chars(msg)
+        # We don't walk source.data — it's covered by the image budget
+        assert chars < 10_000
+        assert chars >= 6000
+
+    def test_audio_block_uses_fixed_budget(self):
+        """input_audio block uses a separate audio budget."""
+        msg = {"role": "user", "content": [
+            {"type": "input_audio", "audio_url": {"url": "data:audio/wav;base64," + "Z" * 100_000}},
+        ]}
+        chars = count_message_chars(msg)
+        # Audio budget is ~2000 chars
+        assert chars < 5000
+        assert chars >= 2000
+
+    def test_text_only_list_content(self):
+        """Pure text list content counts just the text fields."""
+        msg = {"role": "user", "content": [
+            {"type": "text", "text": "Hello"},
+            {"type": "text", "text": "World"},
+        ]}
+        # role(4) + Hello(5) + World(5) = 14
+        assert count_message_chars(msg) == 14
+
+    def test_plain_string_content(self):
+        """Plain string content counts directly + role."""
+        msg = {"role": "user", "content": "Just a question"}
+        # role(4) + content(15) = 19
+        assert count_message_chars(msg) == 19
+
+    def test_none_content(self):
+        """None content (e.g. tool-only assistant turn) handled gracefully."""
+        msg = {"role": "assistant", "content": None}
+        assert count_message_chars(msg) == len("assistant")
+
+    def test_tool_calls_in_message(self):
+        """Tool calls contribute name + arguments to char count."""
+        msg = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "search", "arguments": '{"q":"hello"}'}}
+            ],
+        }
+        # role(9) + name(6) + args(13) = 28
+        assert count_message_chars(msg) == 28
+
+    def test_multimodal_estimate_does_not_explode_with_huge_image(self):
+        """End-to-end: estimate_messages_tokens_rough must not blow up on big images."""
+        big_base64 = "A" * (2 * 1024 * 1024)  # 2MB image
+        msgs = [{"role": "user", "content": [
+            {"type": "text", "text": "Debug this"},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{big_base64}"}},
+        ]}]
+        tokens = estimate_messages_tokens_rough(msgs)
+        # Old: ~524K tokens. New: should be well under 5000.
+        assert tokens < 5000, f"Expected reasonable token count, got {tokens}"
+        assert tokens > 1000  # but not zero
+
+    def test_request_tokens_includes_multimodal_correctly(self):
+        """estimate_request_tokens_rough must use the same path."""
+        big_base64 = "A" * (1024 * 1024)
+        msgs = [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{big_base64}"}},
+        ]}]
+        tokens = estimate_request_tokens_rough(msgs, system_prompt="You are helpful")
+        # System prompt(15 chars) + image(6000) ≈ 6015 chars → ~1504 tokens
+        assert tokens < 3000
+        assert tokens > 1000
+
+    def test_string_message_passes_through(self):
+        """Non-dict messages should still be counted."""
+        assert count_message_chars("hello") == 5
+        assert count_message_chars(None) == 0
 
 
 # =========================================================================
