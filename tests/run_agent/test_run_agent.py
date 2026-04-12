@@ -2198,6 +2198,159 @@ class TestRunConversation:
         mock_handle_function_call.assert_not_called()
 
 
+class TestMultimodalUserMessage:
+    """Tests for run_conversation accepting list user_message (vision turns).
+
+    The gateway sends a list of typed content blocks (text + image_url)
+    when the source platform attached an image and the active model
+    supports native vision.  These tests verify the plumbing accepts
+    that shape end-to-end without coercing to text.
+    """
+
+    # ---- Helper: _user_message_preview ----
+
+    def test_user_message_preview_string(self):
+        assert AIAgent._user_message_preview("hello world") == "hello world"
+
+    def test_user_message_preview_string_truncates(self):
+        assert AIAgent._user_message_preview("a" * 200, max_len=10) == "aaaaaaaaaa..."
+
+    def test_user_message_preview_none(self):
+        assert AIAgent._user_message_preview(None) == ""
+
+    def test_user_message_preview_text_only_list(self):
+        content = [{"type": "text", "text": "Hello world"}]
+        assert AIAgent._user_message_preview(content) == "Hello world"
+
+    def test_user_message_preview_multimodal_list(self):
+        content = [
+            {"type": "text", "text": "Look at this:"},
+            {"type": "image_url", "image_url": {"url": "https://x.com/y.png"}},
+        ]
+        result = AIAgent._user_message_preview(content)
+        assert "Look at this:" in result
+        assert "[image]" in result
+
+    def test_user_message_preview_image_only(self):
+        content = [{"type": "image_url", "image_url": {"url": "https://x.com/y.png"}}]
+        result = AIAgent._user_message_preview(content)
+        assert "[image]" in result
+
+    def test_user_message_preview_audio_block(self):
+        content = [
+            {"type": "text", "text": "Listen:"},
+            {"type": "input_audio", "audio_url": {"url": "data:audio/wav;base64,X"}},
+        ]
+        result = AIAgent._user_message_preview(content)
+        assert "Listen:" in result
+        assert "[audio]" in result
+
+    def test_user_message_preview_anthropic_image_block(self):
+        content = [{"type": "image", "source": {"type": "url", "url": "https://x.com/y.png"}}]
+        result = AIAgent._user_message_preview(content)
+        assert "[image]" in result
+
+    # ---- Helper: _sanitize_user_message_in_place ----
+
+    def test_sanitize_string_passes_through(self):
+        result = AIAgent._sanitize_user_message_in_place("clean text")
+        assert result == "clean text"
+
+    def test_sanitize_string_strips_surrogates(self):
+        # Lone high surrogate (invalid UTF-8)
+        dirty = "hello\ud83d world"
+        result = AIAgent._sanitize_user_message_in_place(dirty)
+        assert "\ud83d" not in result
+
+    def test_sanitize_list_walks_blocks(self):
+        content = [
+            {"type": "text", "text": "hello\ud83d world"},
+            {"type": "image_url", "image_url": {"url": "https://x.com/y.png"}},
+        ]
+        result = AIAgent._sanitize_user_message_in_place(content)
+        assert isinstance(result, list)
+        assert len(result) == 2
+        # Text block sanitized
+        assert "\ud83d" not in result[0]["text"]
+        # Image block untouched
+        assert result[1]["type"] == "image_url"
+        assert result[1]["image_url"]["url"] == "https://x.com/y.png"
+
+    def test_sanitize_list_does_not_mutate_input(self):
+        original = [{"type": "text", "text": "hello"}]
+        result = AIAgent._sanitize_user_message_in_place(original)
+        # Result is a new list with new dicts
+        assert result is not original
+        assert result[0] is not original[0]
+
+    # ---- run_conversation accepts list ----
+
+    def test_run_conversation_accepts_list_content(self, agent):
+        """End-to-end: passing a list user_message should produce a
+        multimodal user message in the API call."""
+        agent._cached_system_prompt = "You are helpful."
+        agent._use_prompt_caching = False
+        agent.tool_delay = 0
+        agent.compression_enabled = False
+        agent.save_trajectories = False
+
+        resp = _mock_response(content="I see a cat", finish_reason="stop")
+        agent.client.chat.completions.create.return_value = resp
+
+        content = [
+            {"type": "text", "text": "What's in this photo?"},
+            {"type": "image_url", "image_url": {"url": "https://x.com/cat.png"}},
+        ]
+        with (
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation(content)
+
+        # Result should be successful
+        assert result["completed"] is True
+
+        # The API call should have received the multimodal content as a list
+        call_kwargs = agent.client.chat.completions.create.call_args.kwargs
+        api_messages = call_kwargs["messages"]
+        user_msgs = [m for m in api_messages if m.get("role") == "user"]
+        assert len(user_msgs) >= 1
+        last_user = user_msgs[-1]
+        assert isinstance(last_user["content"], list), (
+            "user message content was coerced to string — multimodal lost"
+        )
+        # Both blocks should still be there
+        block_types = [b.get("type") for b in last_user["content"]]
+        assert "text" in block_types or "input_text" in block_types
+        assert "image_url" in block_types or "input_image" in block_types
+
+    def test_run_conversation_string_still_works(self, agent):
+        """Backwards compat: passing a plain string still produces a string content."""
+        agent._cached_system_prompt = "You are helpful."
+        agent._use_prompt_caching = False
+        agent.tool_delay = 0
+        agent.compression_enabled = False
+        agent.save_trajectories = False
+
+        resp = _mock_response(content="Hello back", finish_reason="stop")
+        agent.client.chat.completions.create.return_value = resp
+
+        with (
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("Hello")
+
+        assert result["completed"] is True
+        call_kwargs = agent.client.chat.completions.create.call_args.kwargs
+        api_messages = call_kwargs["messages"]
+        user_msgs = [m for m in api_messages if m.get("role") == "user"]
+        assert isinstance(user_msgs[-1]["content"], str)
+        assert user_msgs[-1]["content"] == "Hello"
+
+
 class TestRetryExhaustion:
     """Regression: retry_count > max_retries was dead code (off-by-one).
 

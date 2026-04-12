@@ -37,7 +37,7 @@ import time
 import threading
 from types import SimpleNamespace
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from openai import OpenAI
 import fire
 from datetime import datetime
@@ -3456,6 +3456,69 @@ class AIAgent:
         seed = source or str(response_item_id or "") or uuid.uuid4().hex
         digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:24]
         return f"fc_{digest}"
+
+    @staticmethod
+    def _user_message_preview(user_message: Any, max_len: int = 80) -> str:
+        """Flatten a user message (str or multimodal list) to preview text.
+
+        Logging and display paths need a string, but ``user_message`` may
+        now be a list of typed content blocks.  Walks the list to extract
+        text fields and substitutes ``[image]``/``[audio]`` markers for
+        non-text blocks so the preview stays readable.
+        """
+        if user_message is None:
+            return ""
+        if isinstance(user_message, str):
+            return user_message[:max_len] + ("..." if len(user_message) > max_len else "")
+        if not isinstance(user_message, list):
+            text = str(user_message)
+            return text[:max_len] + ("..." if len(text) > max_len else "")
+        parts: List[str] = []
+        for block in user_message:
+            if isinstance(block, str):
+                if block:
+                    parts.append(block)
+                continue
+            if not isinstance(block, dict):
+                continue
+            btype = str(block.get("type", "") or "")
+            if btype in ("text", "input_text", "output_text"):
+                text = block.get("text", "")
+                if isinstance(text, str) and text:
+                    parts.append(text)
+            elif btype in ("image_url", "input_image", "image"):
+                parts.append("[image]")
+            elif btype in ("input_audio", "audio"):
+                parts.append("[audio]")
+        text = " ".join(parts)
+        return text[:max_len] + ("..." if len(text) > max_len else "")
+
+    @staticmethod
+    def _sanitize_user_message_in_place(user_message: Any) -> Any:
+        """Run surrogate sanitization across all text fields of a user message.
+
+        Plain strings get the legacy ``_sanitize_surrogates`` treatment.
+        For multimodal lists, walk the blocks and sanitize each text
+        field while leaving image/audio fields untouched.
+        """
+        if isinstance(user_message, str):
+            return _sanitize_surrogates(user_message)
+        if not isinstance(user_message, list):
+            return user_message
+        sanitized: List[Any] = []
+        for block in user_message:
+            if isinstance(block, str):
+                sanitized.append(_sanitize_surrogates(block))
+                continue
+            if not isinstance(block, dict):
+                sanitized.append(block)
+                continue
+            new_block = dict(block)
+            text = new_block.get("text")
+            if isinstance(text, str):
+                new_block["text"] = _sanitize_surrogates(text)
+            sanitized.append(new_block)
+        return sanitized
 
     @staticmethod
     def _chat_content_to_responses_content(content: Any, role: str) -> Any:
@@ -7600,7 +7663,7 @@ class AIAgent:
 
     def run_conversation(
         self,
-        user_message: str,
+        user_message: Union[str, List[Dict[str, Any]]],
         system_message: str = None,
         conversation_history: List[Dict[str, Any]] = None,
         task_id: str = None,
@@ -7611,7 +7674,11 @@ class AIAgent:
         Run a complete conversation with tool calling until completion.
 
         Args:
-            user_message (str): The user's message/question
+            user_message (str | list): The user's message/question. May be a
+                plain string OR a list of multimodal content blocks (text +
+                image_url/input_image) for vision-capable models. The
+                gateway sends a list when the source platform attached an
+                image and the active model declares native vision support.
             system_message (str): Custom system message (optional, overrides ephemeral_system_prompt if provided)
             conversation_history (List[Dict]): Previous conversation messages (optional)
             task_id (str): Unique identifier for this task to isolate VMs between concurrent tasks (optional, auto-generated if not provided)
@@ -7643,8 +7710,8 @@ class AIAgent:
         # Sanitize surrogate characters from user input.  Clipboard paste from
         # rich-text editors (Google Docs, Word, etc.) can inject lone surrogates
         # that are invalid UTF-8 and crash JSON serialization in the OpenAI SDK.
-        if isinstance(user_message, str):
-            user_message = _sanitize_surrogates(user_message)
+        # Walks into multimodal blocks so image-bearing turns are also clean.
+        user_message = self._sanitize_user_message_in_place(user_message)
         if isinstance(persist_user_message, str):
             persist_user_message = _sanitize_surrogates(persist_user_message)
 
@@ -7692,7 +7759,7 @@ class AIAgent:
         self.iteration_budget = IterationBudget(self.max_iterations)
 
         # Log conversation turn start for debugging/observability
-        _msg_preview = (user_message[:80] + "...") if len(user_message) > 80 else user_message
+        _msg_preview = self._user_message_preview(user_message, max_len=80)
         _msg_preview = _msg_preview.replace("\n", " ")
         logger.info(
             "conversation turn: session=%s model=%s provider=%s platform=%s history=%d msg=%r",
@@ -7719,7 +7786,16 @@ class AIAgent:
         self._user_turn_count += 1
 
         # Preserve the original user message (no nudge injection).
-        original_user_message = persist_user_message if persist_user_message is not None else user_message
+        # When user_message is multimodal, use a text preview so downstream
+        # string-only consumers (plugin hooks, trajectory saver, memory
+        # extraction) keep receiving a clean text representation while
+        # the API call still gets the full multimodal content.
+        if persist_user_message is not None:
+            original_user_message = persist_user_message
+        elif isinstance(user_message, str):
+            original_user_message = user_message
+        else:
+            original_user_message = self._user_message_preview(user_message, max_len=2_000_000)
 
         # Track memory nudge trigger (turn-based, checked here).
         # Skill trigger is checked AFTER the agent loop completes, based on
@@ -7740,7 +7816,7 @@ class AIAgent:
         self._persist_user_message_idx = current_turn_user_idx
         
         if not self.quiet_mode:
-            self._safe_print(f"💬 Starting conversation: '{user_message[:60]}{'...' if len(user_message) > 60 else ''}'")
+            self._safe_print(f"💬 Starting conversation: '{self._user_message_preview(user_message, max_len=60)}'")
         
         # ── System prompt (cached per session for prefix caching) ──
         # Built once on first call, reused for all subsequent calls.
@@ -10057,7 +10133,7 @@ class AIAgent:
                         and self.valid_tool_names
                         and codex_ack_continuations < 2
                         and self._looks_like_codex_intermediate_ack(
-                            user_message=user_message,
+                            user_message=original_user_message,
                             assistant_content=final_response,
                             messages=messages,
                         )
@@ -10196,7 +10272,7 @@ class AIAgent:
         completed = final_response is not None and api_call_count < self.max_iterations
 
         # Save trajectory if enabled
-        self._save_trajectory(messages, user_message, completed)
+        self._save_trajectory(messages, original_user_message, completed)
 
         # Clean up VM and browser for this task after conversation completes
         self._cleanup_task_resources(effective_task_id)
