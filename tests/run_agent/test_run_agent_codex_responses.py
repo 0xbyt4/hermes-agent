@@ -589,6 +589,153 @@ def test_chat_messages_to_responses_input_accepts_call_pipe_fc_ids(monkeypatch):
     assert function_output["call_id"] == "call_pair123"
 
 
+# =========================================================================
+# Multimodal content (image_url / input_image / Anthropic image blocks)
+# =========================================================================
+
+def test_chat_content_to_responses_content_plain_string():
+    """Plain string content passes through unchanged."""
+    from run_agent import AIAgent
+    result = AIAgent._chat_content_to_responses_content("Hello world", "user")
+    assert result == "Hello world"
+
+
+def test_chat_content_to_responses_content_none_becomes_empty():
+    """None content becomes empty string."""
+    from run_agent import AIAgent
+    assert AIAgent._chat_content_to_responses_content(None, "user") == ""
+    assert AIAgent._chat_content_to_responses_content(None, "assistant") == ""
+
+
+def test_chat_content_to_responses_content_text_block():
+    """Text-only list content emits input_text items."""
+    from run_agent import AIAgent
+    content = [{"type": "text", "text": "Hello"}]
+    result = AIAgent._chat_content_to_responses_content(content, "user")
+    assert result == [{"type": "input_text", "text": "Hello"}]
+
+
+def test_chat_content_to_responses_content_assistant_uses_output_text():
+    """Assistant text blocks use output_text type."""
+    from run_agent import AIAgent
+    content = [{"type": "text", "text": "Reply"}]
+    result = AIAgent._chat_content_to_responses_content(content, "assistant")
+    assert result == [{"type": "output_text", "text": "Reply"}]
+
+
+def test_chat_content_to_responses_content_image_url_dict():
+    """OpenAI-style image_url dict converts to input_image string URL."""
+    from run_agent import AIAgent
+    content = [
+        {"type": "text", "text": "What's in this?"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
+    ]
+    result = AIAgent._chat_content_to_responses_content(content, "user")
+    assert result == [
+        {"type": "input_text", "text": "What's in this?"},
+        {"type": "input_image", "image_url": "https://example.com/x.png"},
+    ]
+
+
+def test_chat_content_to_responses_content_image_url_string():
+    """image_url as plain string (legacy form) also works."""
+    from run_agent import AIAgent
+    content = [{"type": "image_url", "image_url": "https://example.com/y.jpg"}]
+    result = AIAgent._chat_content_to_responses_content(content, "user")
+    assert result == [{"type": "input_image", "image_url": "https://example.com/y.jpg"}]
+
+
+def test_chat_content_to_responses_content_input_image_passthrough():
+    """input_image block (already Responses-shaped) round-trips."""
+    from run_agent import AIAgent
+    content = [{"type": "input_image", "image_url": {"url": "data:image/png;base64,iVBOR"}}]
+    result = AIAgent._chat_content_to_responses_content(content, "user")
+    assert result == [{"type": "input_image", "image_url": "data:image/png;base64,iVBOR"}]
+
+
+def test_chat_content_to_responses_content_anthropic_image_base64():
+    """Anthropic-native image block (base64 source) becomes a data URL."""
+    from run_agent import AIAgent
+    content = [{
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/jpeg",
+            "data": "AAAA",
+        },
+    }]
+    result = AIAgent._chat_content_to_responses_content(content, "user")
+    assert result == [{"type": "input_image", "image_url": "data:image/jpeg;base64,AAAA"}]
+
+
+def test_chat_content_to_responses_content_anthropic_image_url():
+    """Anthropic-native image block (url source) converts directly."""
+    from run_agent import AIAgent
+    content = [{
+        "type": "image",
+        "source": {"type": "url", "url": "https://cdn.example.com/z.png"},
+    }]
+    result = AIAgent._chat_content_to_responses_content(content, "user")
+    assert result == [{"type": "input_image", "image_url": "https://cdn.example.com/z.png"}]
+
+
+def test_chat_messages_to_responses_input_preserves_user_image(monkeypatch):
+    """End-to-end: a user message with image content should yield an
+    input_image item in the Responses input list.
+
+    Before this fix, ``str(content)`` produced a Python repr of the
+    list, which the API rejected as an opaque text blob and the model
+    never saw the image.
+    """
+    agent = _build_agent(monkeypatch)
+    items = agent._chat_messages_to_responses_input([
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this screenshot"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/shot.png"}},
+            ],
+        },
+    ])
+    assert len(items) == 1
+    assert items[0]["role"] == "user"
+    assert isinstance(items[0]["content"], list)
+    text_blocks = [b for b in items[0]["content"] if b["type"] == "input_text"]
+    image_blocks = [b for b in items[0]["content"] if b["type"] == "input_image"]
+    assert len(text_blocks) == 1
+    assert text_blocks[0]["text"] == "Describe this screenshot"
+    assert len(image_blocks) == 1
+    assert image_blocks[0]["image_url"] == "https://example.com/shot.png"
+
+
+def test_chat_messages_to_responses_input_does_not_stringify_list(monkeypatch):
+    """Regression: list content must NOT be coerced via str().
+
+    The old behavior used ``str(content)`` which converted a list of
+    dicts to its Python repr (``"[{'type': 'text', ...}]"``) and sent
+    that as a text blob to the Responses API.  The model never saw any
+    image and the API treated the literal repr as user text.
+    """
+    agent = _build_agent(monkeypatch)
+    items = agent._chat_messages_to_responses_input([
+        {"role": "user", "content": [
+            {"type": "text", "text": "hi"},
+            {"type": "image_url", "image_url": {"url": "https://x.com/img.png"}},
+        ]},
+    ])
+    user_item = items[0]
+    # The fix produces a list of typed blocks; the bug produced a str.
+    assert isinstance(user_item["content"], list), (
+        "user content was stringified — multimodal blocks lost"
+    )
+    # Each block must be a properly-shaped dict, not a string fragment
+    assert all(isinstance(b, dict) for b in user_item["content"])
+    # The image URL must round-trip without escaping/repr quoting
+    image_blocks = [b for b in user_item["content"] if b.get("type") == "input_image"]
+    assert len(image_blocks) == 1
+    assert image_blocks[0]["image_url"] == "https://x.com/img.png"
+
+
 def test_preflight_codex_api_kwargs_strips_optional_function_call_id(monkeypatch):
     agent = _build_agent(monkeypatch)
     preflight = agent._preflight_codex_api_kwargs(
