@@ -67,15 +67,22 @@ class TestEstimateTokensRough:
 
 
 class TestEstimateMessagesTokensRough:
+    # Per-message dict overhead and per-tool-call wrapper overhead.
+    # Match the constants in agent/model_metadata.py so these tests
+    # stay correct if the overhead is tuned.
+    _MSG_OVERHEAD = 30
+    _TOOL_OVERHEAD = 40
+
     def test_empty_list(self):
         assert estimate_messages_tokens_rough([]) == 0
 
     def test_single_message_plain_text(self):
-        """Plain text content: ≈ len(content) + len(role)."""
+        """Plain text content: overhead + len(content) + len(role)."""
         msg = {"role": "user", "content": "a" * 400}
         result = estimate_messages_tokens_rough([msg])
-        # Counts content (400) + role ("user", 4) = 404 chars → ~101 tokens
-        assert result == (404 + 3) // 4
+        # overhead(30) + content(400) + role(4) = 434 chars
+        expected_chars = self._MSG_OVERHEAD + 400 + 4
+        assert result == (expected_chars + 3) // 4
 
     def test_multiple_messages_additive(self):
         msgs = [
@@ -83,8 +90,10 @@ class TestEstimateMessagesTokensRough:
             {"role": "assistant", "content": "Hi there, how can I help?"},
         ]
         result = estimate_messages_tokens_rough(msgs)
-        # user(4) + Hello(5) + assistant(9) + Hi there...(25) = 43
-        assert result == (43 + 3) // 4
+        # msg1: overhead(30) + user(4) + Hello(5) = 39
+        # msg2: overhead(30) + assistant(9) + 25 = 64
+        expected_chars = (self._MSG_OVERHEAD + 4 + 5) + (self._MSG_OVERHEAD + 9 + 25)
+        assert result == (expected_chars + 3) // 4
 
     def test_tool_call_message(self):
         """Tool call messages with no 'content' key still contribute tokens."""
@@ -92,8 +101,9 @@ class TestEstimateMessagesTokensRough:
                "tool_calls": [{"id": "1", "function": {"name": "terminal", "arguments": "{}"}}]}
         result = estimate_messages_tokens_rough([msg])
         assert result > 0
-        # role(9) + name(8) + args(2) = 19 chars → 5 tokens
-        assert result == (19 + 3) // 4
+        # overhead(30) + role(9) + tool_wrapper(40) + name(8) + args(2) = 89
+        expected_chars = self._MSG_OVERHEAD + 9 + self._TOOL_OVERHEAD + 8 + 2
+        assert result == (expected_chars + 3) // 4
 
     def test_message_with_text_only_list_content(self):
         """List content with only text blocks should count just the text."""
@@ -101,8 +111,9 @@ class TestEstimateMessagesTokensRough:
             {"type": "text", "text": "describe this"},
         ]}
         result = estimate_messages_tokens_rough([msg])
-        # role(4) + text(13) = 17 chars → 5 tokens
-        assert result == (17 + 3) // 4
+        # overhead(30) + role(4) + text(13) = 47
+        expected_chars = self._MSG_OVERHEAD + 4 + 13
+        assert result == (expected_chars + 3) // 4
 
 
 class TestCountMessageCharsMultimodal:
@@ -161,28 +172,32 @@ class TestCountMessageCharsMultimodal:
         assert chars < 5000
         assert chars >= 2000
 
+    _MSG_OVERHEAD = 30
+    _TOOL_OVERHEAD = 40
+
     def test_text_only_list_content(self):
-        """Pure text list content counts just the text fields."""
+        """Pure text list content counts just the text fields + overhead."""
         msg = {"role": "user", "content": [
             {"type": "text", "text": "Hello"},
             {"type": "text", "text": "World"},
         ]}
-        # role(4) + Hello(5) + World(5) = 14
-        assert count_message_chars(msg) == 14
+        # overhead(30) + role(4) + Hello(5) + World(5) = 44
+        assert count_message_chars(msg) == self._MSG_OVERHEAD + 4 + 5 + 5
 
     def test_plain_string_content(self):
-        """Plain string content counts directly + role."""
+        """Plain string content counts directly + role + overhead."""
         msg = {"role": "user", "content": "Just a question"}
-        # role(4) + content(15) = 19
-        assert count_message_chars(msg) == 19
+        # overhead(30) + role(4) + content(15) = 49
+        assert count_message_chars(msg) == self._MSG_OVERHEAD + 4 + 15
 
     def test_none_content(self):
         """None content (e.g. tool-only assistant turn) handled gracefully."""
         msg = {"role": "assistant", "content": None}
-        assert count_message_chars(msg) == len("assistant")
+        # overhead(30) + role(9) = 39
+        assert count_message_chars(msg) == self._MSG_OVERHEAD + len("assistant")
 
     def test_tool_calls_in_message(self):
-        """Tool calls contribute name + arguments to char count."""
+        """Tool calls contribute name + arguments + wrapper overhead."""
         msg = {
             "role": "assistant",
             "content": None,
@@ -190,8 +205,9 @@ class TestCountMessageCharsMultimodal:
                 {"id": "c1", "function": {"name": "search", "arguments": '{"q":"hello"}'}}
             ],
         }
-        # role(9) + name(6) + args(13) = 28
-        assert count_message_chars(msg) == 28
+        # overhead(30) + role(9) + tool_wrapper(40) + name(6) + args(13) = 98
+        expected = self._MSG_OVERHEAD + 9 + self._TOOL_OVERHEAD + 6 + 13
+        assert count_message_chars(msg) == expected
 
     def test_multimodal_estimate_does_not_explode_with_huge_image(self):
         """End-to-end: estimate_messages_tokens_rough must not blow up on big images."""

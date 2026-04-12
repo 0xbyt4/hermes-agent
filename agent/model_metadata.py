@@ -1065,6 +1065,17 @@ _IMAGE_CONTENT_CHARS = 6000
 _AUDIO_CONTENT_CHARS = 2000
 
 
+# Approximate dict serialization overhead (braces, quotes, field name
+# wrappers, separators). Empirically derived from comparing
+# ``len(str(msg))`` against our field-by-field count for typical chat
+# messages — averages to ~30 chars for a user turn and ~40 chars per
+# tool call. Without this overhead the new estimator under-reports
+# tool-heavy conversations by 60-75% compared to the legacy formula,
+# making preflight compression and budget checks fire far too late.
+_MESSAGE_DICT_OVERHEAD_CHARS = 30
+_TOOL_CALL_WRAPPER_CHARS = 40
+
+
 def count_message_chars(msg: Any) -> int:
     """Count characters in a message, skipping base64 image/audio payloads.
 
@@ -1075,8 +1086,10 @@ def count_message_chars(msg: Any) -> int:
     or trip false context-overflow checks.
 
     Walks the structure: counts text fields directly, applies fixed
-    per-image / per-audio budgets, and falls back to ``len(str(value))``
-    for unrecognized scalar fields.
+    per-image / per-audio budgets for media blocks, and includes dict
+    serialization overhead so non-image messages stay approximately
+    in line with the legacy ``len(str(msg))`` behaviour the compressor
+    and preflight checks were calibrated against.
     """
     if msg is None:
         return 0
@@ -1085,7 +1098,10 @@ def count_message_chars(msg: Any) -> int:
     if not isinstance(msg, dict):
         return len(str(msg))
 
-    total = 0
+    # Start with a small per-message overhead to account for the dict
+    # braces, quoted field names, and separators that the legacy
+    # ``len(str(msg))`` formula implicitly counted.
+    total = _MESSAGE_DICT_OVERHEAD_CHARS
     content = msg.get("content")
     if isinstance(content, str):
         total += len(content)
@@ -1127,6 +1143,7 @@ def count_message_chars(msg: Any) -> int:
         for tc in tool_calls:
             if not isinstance(tc, dict):
                 continue
+            total += _TOOL_CALL_WRAPPER_CHARS
             fn = tc.get("function", {})
             if isinstance(fn, dict):
                 total += len(str(fn.get("name", "")))
