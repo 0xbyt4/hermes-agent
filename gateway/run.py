@@ -2934,12 +2934,17 @@ class GatewayRunner:
         event: MessageEvent,
         source: SessionSource,
         history: List[Dict[str, Any]],
-    ) -> Optional[str]:
+    ) -> Optional[Any]:
         """Prepare inbound event text for the agent.
 
         Keep the normal inbound path and the queued follow-up path on the same
         preprocessing pipeline so sender attribution, image enrichment, STT,
         document notes, reply context, and @ references all behave the same.
+
+        Returns either a plain ``str`` (legacy text-only path) or a ``list``
+        of multimodal content blocks (text + image_url) when the active model
+        supports native vision and the event includes image attachments.
+        Both shapes flow through ``_run_agent → run_conversation`` unchanged.
         """
         history = history or []
         message_text = event.text or ""
@@ -2963,10 +2968,19 @@ class GatewayRunner:
                     audio_paths.append(path)
 
             if image_paths:
-                message_text = await self._enrich_message_with_vision(
-                    message_text,
-                    image_paths,
-                )
+                if self._should_use_native_vision_for_source(source):
+                    # Native multimodal: build typed content blocks so the
+                    # actual pixels reach the model instead of a lossy text
+                    # description.  Models that don't declare native vision
+                    # support fall through to the legacy text-flatten path.
+                    message_text = self._build_native_vision_content(
+                        message_text, image_paths,
+                    )
+                else:
+                    message_text = await self._enrich_message_with_vision(
+                        message_text,
+                        image_paths,
+                    )
 
             if audio_paths:
                 message_text = await self._enrich_message_with_transcription(
@@ -3534,11 +3548,12 @@ class GatewayRunner:
 
         try:
             # Emit agent:start hook
+            _msg_preview = self._message_preview_for_hook(message_text)
             hook_ctx = {
                 "platform": source.platform.value if source.platform else "",
                 "user_id": source.user_id,
                 "session_id": session_entry.session_id,
-                "message": message_text[:500],
+                "message": _msg_preview[:500],
             }
             await self.hooks.emit("agent:start", hook_ctx)
 
@@ -6845,6 +6860,104 @@ class GatewayRunner:
         from gateway.session_context import clear_session_vars
         clear_session_vars(tokens)
     
+    @staticmethod
+    def _message_preview_for_hook(message: Any) -> str:
+        """Flatten str-or-multimodal-list message to a hook-safe text preview."""
+        if message is None:
+            return ""
+        if isinstance(message, str):
+            return message
+        if not isinstance(message, list):
+            return str(message)
+        parts: List[str] = []
+        for block in message:
+            if isinstance(block, str):
+                if block:
+                    parts.append(block)
+                continue
+            if not isinstance(block, dict):
+                continue
+            btype = str(block.get("type", "") or "")
+            if btype in ("text", "input_text"):
+                t = block.get("text", "")
+                if isinstance(t, str) and t:
+                    parts.append(t)
+            elif btype in ("image_url", "input_image", "image"):
+                parts.append("[image]")
+            elif btype in ("input_audio", "audio"):
+                parts.append("[audio]")
+        return " ".join(parts).strip()
+
+    def _should_use_native_vision_for_source(self, source: SessionSource) -> bool:
+        """True if the model selected for this source declares native vision.
+
+        Honors the same per-session model overrides as the actual agent
+        runtime so the gateway routes images consistently with the model
+        the agent will use for this turn.
+
+        ``HERMES_FORCE_NATIVE_VISION=1`` forces True for users on
+        self-hosted vision models that aren't catalogued in models.dev.
+        """
+        if os.environ.get("HERMES_FORCE_NATIVE_VISION") == "1":
+            return True
+        try:
+            model, runtime_kwargs = self._resolve_session_agent_runtime(source=source)
+        except Exception as exc:
+            logger.debug("native_vision: runtime resolution failed: %s", exc)
+            return False
+        provider = (runtime_kwargs.get("provider") or "") if runtime_kwargs else ""
+        if not model:
+            return False
+        try:
+            from agent.models_dev import get_model_capabilities
+            caps = get_model_capabilities(provider, model)
+            return bool(caps and caps.supports_vision)
+        except Exception as exc:
+            logger.debug("native_vision: capability lookup failed for %s/%s: %s",
+                         provider, model, exc)
+            return False
+
+    def _build_native_vision_content(
+        self,
+        user_text: str,
+        image_paths: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Build a multimodal content list for vision-capable models.
+
+        Reads each image into a base64 data URL and emits an OpenAI-style
+        ``image_url`` content block.  The agent's provider adapter
+        converts these into the right native format (Anthropic image
+        blocks, OpenAI image_url, Codex input_image, etc.).
+
+        The user's caption text is included as the first block when
+        non-empty so the model has a prompt alongside the images.
+        """
+        from tools.vision_tools import _image_to_base64_data_url
+
+        blocks: List[Dict[str, Any]] = []
+        if user_text:
+            blocks.append({"type": "text", "text": user_text})
+
+        for path in image_paths:
+            try:
+                data_url = _image_to_base64_data_url(Path(path))
+            except Exception as exc:
+                logger.warning(
+                    "native_vision: failed to encode %s, skipping image: %s",
+                    path, exc,
+                )
+                continue
+            blocks.append({
+                "type": "image_url",
+                "image_url": {"url": data_url},
+            })
+
+        # If no images encoded successfully and no caption, fall back to
+        # an empty string so downstream callers handle it normally.
+        if not blocks:
+            return ""  # type: ignore[return-value]
+        return blocks
+
     async def _enrich_message_with_vision(
         self,
         user_text: str,
@@ -7251,7 +7364,7 @@ class GatewayRunner:
 
     async def _run_agent(
         self,
-        message: str,
+        message: Any,
         context_prompt: str,
         history: List[Dict[str, Any]],
         source: SessionSource,
@@ -7262,6 +7375,11 @@ class GatewayRunner:
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
+
+        ``message`` may be a plain string OR a list of multimodal content
+        blocks (text + image_url) when the active model declares native
+        vision support and the source platform attached an image. Both
+        shapes flow through to ``run_conversation`` unchanged.
         
         Returns the full result dict from run_conversation, including:
           - "final_response": str (the text to send back)
@@ -7930,7 +8048,12 @@ class GatewayRunner:
             _pending_notes = getattr(self, '_pending_model_notes', {})
             _msn = _pending_notes.pop(session_key, None) if session_key else None
             if _msn:
-                message = _msn + "\n\n" + message
+                if isinstance(message, list):
+                    # Multimodal: prepend the note as a text block so the
+                    # image content blocks remain intact
+                    message = [{"type": "text", "text": _msn + "\n\n"}] + list(message)
+                else:
+                    message = _msn + "\n\n" + message
 
             _approval_session_key = session_key or ""
             _approval_session_token = set_current_session_key(_approval_session_key)
@@ -8040,10 +8163,13 @@ class GatewayRunner:
                 try:
                     from agent.title_generator import maybe_auto_title
                     all_msgs = result_holder[0].get("messages", []) if result_holder[0] else []
+                    # Title generator expects a plain text user_message;
+                    # flatten multimodal content to its text preview.
+                    _title_user_msg = self._message_preview_for_hook(message)
                     maybe_auto_title(
                         self._session_db,
                         effective_session_id,
-                        message,
+                        _title_user_msg,
                         final_response,
                         all_msgs,
                     )
