@@ -391,6 +391,7 @@ def test_try_refresh_current_updates_only_current_entry(tmp_path, monkeypatch):
 def test_load_pool_seeds_env_api_key(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-seeded")
+    monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
     _write_auth_store(tmp_path, {"version": 1, "providers": {}})
 
     from agent.credential_pool import load_pool
@@ -401,6 +402,65 @@ def test_load_pool_seeds_env_api_key(tmp_path, monkeypatch):
     assert entry is not None
     assert entry.source == "env:OPENROUTER_API_KEY"
     assert entry.access_token == "sk-or-seeded"
+    # No env override → falls back to canonical OpenRouter endpoint
+    assert entry.base_url == "https://openrouter.ai/api/v1"
+
+
+def test_load_pool_openrouter_seed_honors_base_url_env_override(tmp_path, monkeypatch):
+    """OPENROUTER_BASE_URL env override must propagate into the pool entry.
+
+    Without this, users routing their OpenRouter API key through an
+    alternate endpoint (Nous Portal, custom proxy, OR-compatible mirror)
+    end up with a pool entry that pairs the alt-endpoint key with the
+    canonical openrouter.ai URL, causing every auxiliary call to return
+    401 ``Missing Authentication header``.
+    """
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-nous-key")
+    monkeypatch.setenv("OPENROUTER_BASE_URL", "https://inference-api.nousresearch.com/v1")
+    _write_auth_store(tmp_path, {"version": 1, "providers": {}})
+
+    from agent.credential_pool import load_pool
+
+    pool = load_pool("openrouter")
+    entry = pool.select()
+
+    assert entry is not None
+    assert entry.access_token == "sk-nous-key"
+    assert entry.base_url == "https://inference-api.nousresearch.com/v1"
+
+
+def test_load_pool_openrouter_seed_strips_trailing_slash(tmp_path, monkeypatch):
+    """Trailing slash in OPENROUTER_BASE_URL must be normalized away."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENROUTER_BASE_URL", "https://custom.example.com/v1/")
+    _write_auth_store(tmp_path, {"version": 1, "providers": {}})
+
+    from agent.credential_pool import load_pool
+
+    pool = load_pool("openrouter")
+    entry = pool.select()
+
+    assert entry is not None
+    # Trailing slash stripped to match canonical form
+    assert entry.base_url == "https://custom.example.com/v1"
+
+
+def test_load_pool_openrouter_empty_base_url_falls_back_to_default(tmp_path, monkeypatch):
+    """Explicit empty OPENROUTER_BASE_URL should fall through to default."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENROUTER_BASE_URL", "")
+    _write_auth_store(tmp_path, {"version": 1, "providers": {}})
+
+    from agent.credential_pool import load_pool
+
+    pool = load_pool("openrouter")
+    entry = pool.select()
+
+    assert entry is not None
+    assert entry.base_url == "https://openrouter.ai/api/v1"
 
 
 def test_load_pool_removes_stale_seeded_env_entry(tmp_path, monkeypatch):

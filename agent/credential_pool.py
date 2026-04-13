@@ -1193,6 +1193,15 @@ def _seed_from_env(provider: str, entries: List[PooledCredential]) -> Tuple[bool
         if token:
             source = "env:OPENROUTER_API_KEY"
             active_sources.add(source)
+            # Honor OPENROUTER_BASE_URL env override the same way the
+            # generic seeding path below honors per-provider base URL env
+            # vars.  Without this, users who route their OpenRouter API
+            # key through an alternate endpoint (Nous Portal, custom
+            # OR-compatible proxy) get a pool entry with a Nous key but
+            # the canonical openrouter.ai URL — every auxiliary call then
+            # returns 401 ``Missing Authentication header``.
+            env_base_url = os.getenv("OPENROUTER_BASE_URL", "").strip().rstrip("/")
+            base_url = env_base_url or OPENROUTER_BASE_URL
             changed |= _upsert_entry(
                 entries,
                 provider,
@@ -1201,7 +1210,7 @@ def _seed_from_env(provider: str, entries: List[PooledCredential]) -> Tuple[bool
                     "source": source,
                     "auth_type": AUTH_TYPE_API_KEY,
                     "access_token": token,
-                    "base_url": OPENROUTER_BASE_URL,
+                    "base_url": base_url,
                     "label": "OPENROUTER_API_KEY",
                 },
             )
