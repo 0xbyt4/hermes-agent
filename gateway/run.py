@@ -7573,7 +7573,10 @@ class GatewayRunner:
         _start = time.time()
 
         try:
-            _timeout = ClientTimeout(total=0, sock_read=1800)
+            # sock_connect bounds the TCP connect phase so an unreachable
+            # proxy host (DNS fail, firewall, remote down) fails fast
+            # instead of hanging until the OS default gives up.
+            _timeout = ClientTimeout(total=0, sock_read=1800, sock_connect=30)
             async with _AioClientSession(timeout=_timeout) as session:
                 async with session.post(
                     f"{proxy_url}/v1/chat/completions",
@@ -7595,7 +7598,10 @@ class GatewayRunner:
 
                     # Parse SSE stream
                     buffer = ""
+                    done = False
                     async for chunk in resp.content.iter_any():
+                        if done:
+                            break
                         text = chunk.decode("utf-8", errors="replace")
                         buffer += text
 
@@ -7608,18 +7614,32 @@ class GatewayRunner:
                             if line.startswith("data: "):
                                 data = line[6:]
                                 if data.strip() == "[DONE]":
+                                    # Stop both loops — a buggy upstream
+                                    # that holds the connection open after
+                                    # [DONE] would otherwise block us for
+                                    # up to sock_read seconds.
+                                    done = True
                                     break
                                 try:
                                     obj = json.loads(data)
-                                    choices = obj.get("choices", [])
-                                    if choices:
-                                        delta = choices[0].get("delta", {})
-                                        content = delta.get("content", "")
-                                        if content:
-                                            full_response += content
-                                            if _stream_consumer:
-                                                _stream_consumer.on_delta(content)
-                                except json.JSONDecodeError:
+                                    choices = obj.get("choices") or []
+                                    if not isinstance(choices, list) or not choices:
+                                        continue
+                                    first = choices[0]
+                                    if not isinstance(first, dict):
+                                        continue
+                                    delta = first.get("delta") or {}
+                                    if not isinstance(delta, dict):
+                                        continue
+                                    content = delta.get("content", "")
+                                    if content:
+                                        full_response += content
+                                        if _stream_consumer:
+                                            _stream_consumer.on_delta(content)
+                                except (json.JSONDecodeError, TypeError, AttributeError):
+                                    # One malformed chunk should not abort
+                                    # the whole stream — skip it and keep
+                                    # parsing the rest.
                                     pass
 
         except asyncio.CancelledError:
