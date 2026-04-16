@@ -8534,7 +8534,7 @@ class AIAgent:
 
             if self.tool_complete_callback:
                 try:
-                    self.tool_complete_callback(tc.id, name, args, function_result)
+                    self.tool_complete_callback(tc.id, name, args, function_result if not _is_multimodal else _text_summary)
                 except Exception as cb_err:
                     logging.debug(f"Tool complete callback error: {cb_err}")
 
@@ -8952,11 +8952,14 @@ class AIAgent:
 
             if self.verbose_logging:
                 logging.debug(f"Tool {function_name} completed in {tool_duration:.2f}s")
-                logging.debug(f"Tool result ({len(function_result)} chars): {function_result}")
+                if _is_multimodal:
+                    logging.debug(f"Tool result (multimodal): {result_preview}")
+                else:
+                    logging.debug(f"Tool result ({len(function_result)} chars): {function_result}")
 
             if self.tool_complete_callback:
                 try:
-                    self.tool_complete_callback(tool_call.id, function_name, function_args, function_result)
+                    self.tool_complete_callback(tool_call.id, function_name, function_args, result_preview if _is_multimodal else function_result)
                 except Exception as cb_err:
                     logging.debug(f"Tool complete callback error: {cb_err}")
 
@@ -10437,8 +10440,6 @@ class AIAgent:
                                 written = getattr(details, 'cache_write_tokens', 0) or 0 if details else 0
                             prompt = usage_dict["prompt_tokens"]
                             hit_pct = (cached / prompt * 100) if prompt > 0 else 0
-                            # Always log cache stats (even in quiet_mode) for diagnostics
-                            logging.info("Cache: %s/%s tokens (%.0f%% hit, %s written)", f"{cached:,}", f"{prompt:,}", hit_pct, f"{written:,}")
                             if not self.quiet_mode:
                                 self._vprint(f"{self.log_prefix}   💾 Cache: {cached:,}/{prompt:,} tokens ({hit_pct:.0f}% hit, {written:,} written)")
                     
