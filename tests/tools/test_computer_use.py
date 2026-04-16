@@ -60,6 +60,20 @@ class TestComputeScale:
         w, h, _ = _compute_scale(3840, 2160)
         assert max(w, h) <= 1568
 
+    def test_pixel_limit_binds_over_edge_limit(self):
+        """When aspect ratio is near-square, pixel limit (1.1MP) binds before edge limit (1568px).
+
+        Example: 1500x1500 has long edge 1500 (<1568 edge limit) but
+        2.25M pixels (>1.1M pixel limit). The pixel constraint must
+        downscale it, not the edge constraint.
+        """
+        from tools.computer_use_tool import _compute_scale, _MAX_SCREENSHOT_PIXELS
+        w, h, scale = _compute_scale(1500, 1500)
+        assert w * h <= _MAX_SCREENSHOT_PIXELS
+        assert scale < 1.0
+        # Edge would not have triggered downscale (1500 < 1568), so pixel limit did
+        assert max(w, h) < 1500
+
 
 class TestNativeToolDefinition:
     """Test the Anthropic native tool definition generation."""
@@ -925,6 +939,44 @@ class TestBlockedTypePatterns:
         from tools.computer_use_tool import _execute_action
         with patch("subprocess.run"):
             result = _execute_action("type", {"text": "sudo apt install vim"})
+            assert "blocked" not in result
+
+    def test_chmod_setuid_blocked(self):
+        """chmod +s (setuid) is a privilege escalation vector."""
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("type", {"text": "chmod +s /tmp/evil"})
+        assert "blocked" in result
+
+    def test_chmod_u_plus_s_blocked(self):
+        """chmod u+s same thing, different syntax."""
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("type", {"text": "chmod u+s /bin/bash"})
+        assert "blocked" in result
+
+    def test_launchctl_bootout_blocked(self):
+        """launchctl bootout can disable security daemons."""
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("type", {"text": "launchctl bootout system/com.apple.security"})
+        assert "blocked" in result
+
+    def test_launchctl_unload_blocked(self):
+        """launchctl unload legacy path to same result as bootout."""
+        from tools.computer_use_tool import _execute_action
+        result = _execute_action("type", {"text": "launchctl unload /Library/LaunchDaemons/com.x.plist"})
+        assert "blocked" in result
+
+    def test_chmod_755_not_blocked(self):
+        """Normal chmod without setuid must pass."""
+        from tools.computer_use_tool import _execute_action
+        with patch("subprocess.run"):
+            result = _execute_action("type", {"text": "chmod 755 file.sh"})
+            assert "blocked" not in result
+
+    def test_launchctl_list_not_blocked(self):
+        """launchctl list is read-only."""
+        from tools.computer_use_tool import _execute_action
+        with patch("subprocess.run"):
+            result = _execute_action("type", {"text": "launchctl list"})
             assert "blocked" not in result
 
 

@@ -1293,15 +1293,15 @@ def convert_messages_to_anthropic(
     # replace older ones with a text placeholder.
     #
     # Performance vs context trade-off:
-    #   1 (default) — fastest, model only sees the latest screenshot
-    #   2-3         — model can compare before/after states (useful for
-    #                 verifying multi-step UI changes) but adds ~1.5K
-    #                 tokens per extra image, slowing every API call
+    #   1           — fastest, but model can't compare before/after
+    #   3 (default) — enables before/after verification (needed for the
+    #                 SKILL.md drag workflow: source icon zoom → drag →
+    #                 result screenshot). Adds ~3K tokens per call vs 1,
+    #                 acceptable for the clarity gain.
     #   5+          — rarely useful, significant latency impact
     #
-    # The model almost always decides based on the most recent screenshot
-    # alone, so keeping 1 is the best default. Increase only if the agent
-    # needs explicit before/after comparison for a specific workflow.
+    # Server-side context management (clear_tool_uses_20250919) also keeps
+    # the latest 3 tool results, so we match it here for consistency.
     _MAX_KEEP_IMAGES = 3
     _image_count = 0
     for msg in reversed(result):

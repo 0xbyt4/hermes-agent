@@ -135,6 +135,8 @@ _BLOCKED_TYPE_PATTERNS = [
     _re.compile(r"sudo\s+(-\w+\s+)*passwd", _re.IGNORECASE),    # sudo passwd (change passwords)
     _re.compile(r"sudo\s+(-\w+\s+)*visudo", _re.IGNORECASE),    # sudo visudo (edit sudoers)
     _re.compile(r"sudo\s+(-\w+\s+)*chown\s+.*root", _re.IGNORECASE),  # sudo chown root
+    _re.compile(r"chmod\s+(-\w+\s+)*[ugoa]*[+-][rwxstugoa]*s\b", _re.IGNORECASE),  # chmod +s / u+s (setuid)
+    _re.compile(r"\blaunchctl\s+(bootout|unload|disable|remove)\b", _re.IGNORECASE),  # disable launchd daemons
 ]
 
 # pyautogui key name normalization.
@@ -322,7 +324,11 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
                 ["sips", "-g", "pixelWidth", "-g", "pixelHeight", tmp_path],
                 capture_output=True, text=True, timeout=5,
             )
-            img_w, img_h = new_w, round(img_h * new_w / img_w)  # fallback
+            # Fallback: analytic scaling if sips output is malformed.
+            # Compute before reassigning img_w so the ratio uses the original.
+            _img_h_fallback = round(img_h * new_w / img_w)
+            img_w = new_w
+            img_h = _img_h_fallback
             for _line in _resized.stdout.strip().splitlines():
                 if "pixelWidth" in _line:
                     img_w = int(_line.split(":")[-1].strip())
