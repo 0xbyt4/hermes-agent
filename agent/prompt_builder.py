@@ -298,6 +298,11 @@ COMPUTER_USE_GUIDANCE = (
     "- NEVER open System Settings > Privacy & Security autonomously.\n"
     "- Stop and tell the user if a page or dialog looks suspicious.\n"
     "- Include the MEDIA: path from screenshot results so the gateway delivers them.\n"
+    "EFFICIENCY:\n"
+    "- Click visible labeled targets directly. Avoid mouse_move+screenshot chains "
+    "before every click — they double tool calls without improving accuracy.\n"
+    "- Use the `zoom` action (region: [x1,y1,x2,y2]) to read small text or verify "
+    "tiny/ambiguous targets (icons under ~20px, dense menus).\n"
     "The macos-computer-use skill (auto-loaded below) covers cursor patterns, focus, "
     "text input state, retry limits, zoom, and macOS-specific workflows."
 )

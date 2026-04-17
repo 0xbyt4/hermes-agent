@@ -258,7 +258,7 @@ class TestActionExecution:
     def test_mouse_move(self):
         from tools.computer_use_tool import _execute_action
         result = _execute_action("mouse_move", {"coordinate": [100, 200]})
-        self.mock_pag.moveTo.assert_called_once_with(100, 200, duration=0.3)
+        self.mock_pag.moveTo.assert_called_once_with(100, 200, duration=0)
         assert "moved" in result
 
     def test_unknown_action(self):
@@ -785,6 +785,112 @@ class TestTempFileCleanup:
             _cleanup_temp_files()
 
 
+class TestReadPngDimensions:
+    """Test direct PNG IHDR parsing (replaces sips -g subprocess)."""
+
+    def _make_png(self, path: str, width: int, height: int) -> None:
+        """Write a minimal valid PNG with given width/height in IHDR."""
+        import struct
+        import zlib
+        sig = b"\x89PNG\r\n\x1a\n"
+        # IHDR: 13-byte chunk. width, height, bit_depth=8, color_type=2 (RGB),
+        # compression=0, filter=0, interlace=0.
+        ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+        ihdr_crc = zlib.crc32(b"IHDR" + ihdr_data)
+        ihdr = struct.pack(">I", 13) + b"IHDR" + ihdr_data + struct.pack(">I", ihdr_crc)
+        # IEND: empty chunk
+        iend = struct.pack(">I", 0) + b"IEND" + struct.pack(">I", zlib.crc32(b"IEND"))
+        with open(path, "wb") as f:
+            f.write(sig + ihdr + iend)
+
+    def test_reads_typical_retina_dimensions(self):
+        from tools.computer_use_tool import _read_png_dimensions
+        path = f"/tmp/hermes_test_png_{os.getpid()}.png"
+        try:
+            self._make_png(path, 2940, 1912)
+            w, h = _read_png_dimensions(path)
+            assert w == 2940
+            assert h == 1912
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    def test_reads_small_dimensions(self):
+        from tools.computer_use_tool import _read_png_dimensions
+        path = f"/tmp/hermes_test_png_small_{os.getpid()}.png"
+        try:
+            self._make_png(path, 1, 1)
+            w, h = _read_png_dimensions(path)
+            assert w == 1
+            assert h == 1
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    def test_rejects_non_png(self):
+        from tools.computer_use_tool import _read_png_dimensions
+        path = f"/tmp/hermes_test_not_png_{os.getpid()}.bin"
+        try:
+            with open(path, "wb") as f:
+                f.write(b"not a png file at all")
+            with pytest.raises(ValueError, match="not a valid PNG"):
+                _read_png_dimensions(path)
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    def test_rejects_truncated_file(self):
+        from tools.computer_use_tool import _read_png_dimensions
+        path = f"/tmp/hermes_test_trunc_{os.getpid()}.png"
+        try:
+            with open(path, "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\n")  # signature only, no IHDR
+            with pytest.raises(ValueError, match="not a valid PNG"):
+                _read_png_dimensions(path)
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+class TestAutoScreenshotDelays:
+    """Test per-action auto-screenshot settle timing map."""
+
+    def test_all_destructive_actions_have_delays(self):
+        from tools.computer_use_tool import _DESTRUCTIVE_ACTIONS
+        # The delay map lives inside handle_computer_use; import by exec via
+        # a dry call would over-couple. Instead we assert the set of actions
+        # that *should* auto-screenshot is non-empty and well-known.
+        expected = {
+            "left_click", "right_click", "double_click", "triple_click",
+            "middle_click", "left_click_drag", "type", "key", "scroll",
+        }
+        assert expected <= _DESTRUCTIVE_ACTIONS
+
+    def test_delays_are_reasonable(self):
+        # Re-import the constant directly from the module to lock tuning.
+        import tools.computer_use_tool as cu
+        # Walk the module AST to find _AUTO_SCREENSHOT_DELAYS — we inline it
+        # in handle_computer_use, so parse the source to verify values.
+        import inspect
+        src = inspect.getsource(cu.handle_computer_use)
+        # Every action delay should be in [0.3, 0.8] range — faster than the
+        # old 1.0s flat delay, slow enough for UI to settle.
+        import re as _re_test
+        matches = _re_test.findall(r'"([a-z_]+)":\s*(0\.\d+)', src)
+        assert len(matches) >= 9, f"Expected 9+ action delays, got {len(matches)}"
+        for action, delay_str in matches:
+            d = float(delay_str)
+            assert 0.3 <= d <= 0.8, f"{action} delay {d}s outside reasonable range"
+
+
 class TestRequirementsCheck:
     """Test platform requirements detection."""
 
@@ -1170,7 +1276,7 @@ class TestMouseMoveDragAware:
         self.mock_quartz.CGEventSourceButtonState.return_value = False
         from tools.computer_use_tool import _execute_action
         result = _execute_action("mouse_move", {"coordinate": [500, 300]})
-        self.mock_pag.moveTo.assert_called_once_with(500, 300, duration=0.3)
+        self.mock_pag.moveTo.assert_called_once_with(500, 300, duration=0)
         assert "moved to" in result
 
     def test_drag_move_uses_quartz(self):

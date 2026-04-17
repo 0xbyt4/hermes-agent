@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re as _re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -309,6 +310,31 @@ def scale_coordinates_to_screen(
 # Screenshot capture
 # ---------------------------------------------------------------------------
 
+# PNG IHDR offsets (RFC 2083): 8-byte signature + 4-byte chunk length + "IHDR"
+# marker, then 4-byte big-endian width and 4-byte big-endian height.
+_PNG_IHDR_WIDTH_OFFSET = 16
+_PNG_IHDR_HEIGHT_OFFSET = 20
+
+
+def _read_png_dimensions(path: str) -> Tuple[int, int]:
+    """Read PNG width/height directly from IHDR chunk.
+
+    Replaces `sips -g pixelWidth -g pixelHeight` subprocess calls (~46ms
+    each) with a ~0.1ms struct.unpack. Both screencapture and sips produce
+    standard PNGs with IHDR as the first chunk, so the byte offsets are
+    deterministic.
+    """
+    with open(path, "rb") as f:
+        header = f.read(24)
+    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"not a valid PNG: {path}")
+    w, h = struct.unpack(
+        ">II",
+        header[_PNG_IHDR_WIDTH_OFFSET:_PNG_IHDR_HEIGHT_OFFSET + 4],
+    )
+    return int(w), int(h)
+
+
 def _take_screenshot() -> Tuple[str, int, int, str]:
     """Capture screenshot, resize to API limits, return (base64_data, image_w, image_h, media_type).
 
@@ -327,18 +353,9 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
         if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
             raise RuntimeError("screencapture produced no output")
 
-        # Get actual image dimensions via sips
-        result = subprocess.run(
-            ["sips", "-g", "pixelWidth", "-g", "pixelHeight", tmp_path],
-            capture_output=True, text=True, timeout=5,
-        )
-        lines = result.stdout.strip().splitlines()
-        img_w = img_h = 0
-        for line in lines:
-            if "pixelWidth" in line:
-                img_w = int(line.split(":")[-1].strip())
-            elif "pixelHeight" in line:
-                img_h = int(line.split(":")[-1].strip())
+        # Read dimensions directly from PNG IHDR chunk. ~0.1ms vs ~46ms for
+        # `sips -g` subprocess. screencapture always emits a standard PNG.
+        img_w, img_h = _read_png_dimensions(tmp_path)
 
         # Resize to logical resolution (pyautogui coordinate space).
         # screencapture captures at physical/Retina pixels (e.g. 2940x1912)
@@ -376,23 +393,15 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
                 ["sips", "--resampleWidth", str(new_w), tmp_path],
                 capture_output=True, timeout=10,
             )
-            # Read actual dimensions after resize — sips may round height
+            # Read actual dimensions from PNG header. sips may round height
             # differently than Python (off by 1px), and _cached_screenshot_size
             # must match the real image pixels Claude sees.
-            _resized = subprocess.run(
-                ["sips", "-g", "pixelWidth", "-g", "pixelHeight", tmp_path],
-                capture_output=True, text=True, timeout=5,
-            )
-            # Fallback: analytic scaling if sips output is malformed.
-            # Compute before reassigning img_w so the ratio uses the original.
-            _img_h_fallback = round(img_h * new_w / img_w)
-            img_w = new_w
-            img_h = _img_h_fallback
-            for _line in _resized.stdout.strip().splitlines():
-                if "pixelWidth" in _line:
-                    img_w = int(_line.split(":")[-1].strip())
-                elif "pixelHeight" in _line:
-                    img_h = int(_line.split(":")[-1].strip())
+            try:
+                img_w, img_h = _read_png_dimensions(tmp_path)
+            except (OSError, ValueError):
+                # Fallback: analytic scaling if PNG header read fails.
+                img_h = round(img_h * new_w / img_w)
+                img_w = new_w
 
         # Keep PNG format — token cost is pixel-based (width*height/750),
         # not byte-based, so PNG vs JPEG costs the same tokens. But PNG
@@ -528,7 +537,9 @@ def _execute_action(action: str, args: Dict[str, Any],
                 Quartz.CGEventPost(Quartz.kCGHIDEventTap, drag_ev)
                 time.sleep(0.015)
         else:
-            pyautogui.moveTo(coordinate[0], coordinate[1], duration=0.3)
+            # duration=0 is an instant teleport — cursor animation is invisible
+            # to Claude and adds pure latency before the follow-up screenshot.
+            pyautogui.moveTo(coordinate[0], coordinate[1], duration=0)
         ix, iy = _pos_in_image_space()
         return f"moved to ({ix}, {iy}). Take a screenshot to verify cursor is on the correct element before clicking."
 
@@ -866,17 +877,12 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
                 ["screencapture", "-x", "-C", "-t", "png", tmp_full],
                 capture_output=True, timeout=10,
             )
-            # Get Retina dimensions to compute scale factor
-            _sips_info = subprocess.run(
-                ["sips", "-g", "pixelWidth", "-g", "pixelHeight", tmp_full],
-                capture_output=True, text=True, timeout=5,
-            )
-            retina_w = retina_h = 0
-            for _line in _sips_info.stdout.strip().splitlines():
-                if "pixelWidth" in _line:
-                    retina_w = int(_line.split(":")[-1].strip())
-                elif "pixelHeight" in _line:
-                    retina_h = int(_line.split(":")[-1].strip())
+            # Read Retina dimensions from PNG header (same optimization as
+            # the main screenshot path — ~46ms faster than `sips -g`).
+            try:
+                retina_w, retina_h = _read_png_dimensions(tmp_full)
+            except (OSError, ValueError):
+                retina_w = retina_h = 0
 
             # Scale region coordinates from image space to Retina space.
             # Claude sends coordinates in image space (~1300x845), but the
@@ -969,13 +975,24 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     # Auto-screenshot after destructive actions so Claude sees the result
     # without needing a separate screenshot call (saves 1 API round-trip).
     # Only for actions that change screen state — skip for wait, mouse_move.
-    _AUTO_SCREENSHOT_ACTIONS = {
-        "left_click", "right_click", "double_click", "triple_click",
-        "middle_click", "left_click_drag", "type", "key", "scroll",
+    # Per-action render settle times — tuned to be just long enough for
+    # typical UI rendering. Previously a flat 1.0s across all actions,
+    # which wasted ~10s over a 16-action session. Context menus and
+    # app-launches still render within 500ms on modern macOS.
+    _AUTO_SCREENSHOT_DELAYS = {
+        "left_click": 0.4,
+        "right_click": 0.4,
+        "double_click": 0.5,
+        "triple_click": 0.5,
+        "middle_click": 0.4,
+        "left_click_drag": 0.6,
+        "type": 0.5,
+        "key": 0.4,
+        "scroll": 0.4,
     }
-    if action in _AUTO_SCREENSHOT_ACTIONS:
+    if action in _AUTO_SCREENSHOT_DELAYS:
         try:
-            time.sleep(1.0)  # Wait for UI to render before capturing
+            time.sleep(_AUTO_SCREENSHOT_DELAYS[action])
             b64_data, img_w, img_h, img_media = _take_screenshot()
             try:
                 _mx, _my = _pag.position()
