@@ -67,12 +67,88 @@ class TestComputeScale:
         2.25M pixels (>1.1M pixel limit). The pixel constraint must
         downscale it, not the edge constraint.
         """
-        from tools.computer_use_tool import _compute_scale, _MAX_SCREENSHOT_PIXELS
+        from tools.computer_use_tool import _compute_scale, _MAX_SCREENSHOT_PIXELS, set_active_model
+        set_active_model(None)  # default limits
         w, h, scale = _compute_scale(1500, 1500)
         assert w * h <= _MAX_SCREENSHOT_PIXELS
         assert scale < 1.0
         # Edge would not have triggered downscale (1500 < 1568), so pixel limit did
         assert max(w, h) < 1500
+
+
+class TestModelGatedResolutionLimits:
+    """Test per-model screenshot resolution caps.
+
+    Opus 4.7 supports up to 2576px long edge with 1:1 image-to-coordinate
+    mapping. Older models cap at 1568px / 1.1MP and require coord scaling.
+    """
+
+    def teardown_method(self):
+        # Reset to default after each test so module-level state doesn't leak
+        from tools.computer_use_tool import set_active_model
+        set_active_model(None)
+
+    def test_default_limits_apply_when_no_model_set(self):
+        from tools.computer_use_tool import _resolution_limits, set_active_model
+        set_active_model(None)
+        max_edge, max_pixels = _resolution_limits()
+        assert max_edge == 1568
+        assert max_pixels == 1_100_000
+
+    def test_sonnet_46_uses_default_limits(self):
+        from tools.computer_use_tool import _resolution_limits, set_active_model
+        set_active_model("claude-sonnet-4-6")
+        assert _resolution_limits() == (1568, 1_100_000)
+
+    def test_opus_46_uses_default_limits(self):
+        from tools.computer_use_tool import _resolution_limits, set_active_model
+        set_active_model("claude-opus-4-6")
+        assert _resolution_limits() == (1568, 1_100_000)
+
+    def test_opus_47_uses_higher_edge_no_pixel_cap(self):
+        from tools.computer_use_tool import _resolution_limits, set_active_model
+        set_active_model("claude-opus-4-7")
+        max_edge, max_pixels = _resolution_limits()
+        assert max_edge == 2576
+        assert max_pixels is None
+
+    def test_opus_47_dotted_alias_recognised(self):
+        from tools.computer_use_tool import _resolution_limits, set_active_model
+        set_active_model("claude-opus-4.7")
+        assert _resolution_limits() == (2576, None)
+
+    def test_opus_47_no_downscale_at_logical_macbook_resolution(self):
+        """1470x956 stays full-resolution on Opus 4.7 (was downsampled to 1300x845 on Sonnet)."""
+        from tools.computer_use_tool import _compute_scale, set_active_model
+        set_active_model("claude-opus-4-7")
+        w, h, scale = _compute_scale(1470, 956)
+        assert (w, h, scale) == (1470, 956, 1.0)
+
+    def test_sonnet_46_still_downscales_logical_macbook_resolution(self):
+        """Regression guard: 1470x956 must still downsample on Sonnet 4.6."""
+        from tools.computer_use_tool import _compute_scale, set_active_model
+        set_active_model("claude-sonnet-4-6")
+        w, h, scale = _compute_scale(1470, 956)
+        assert scale < 1.0
+        assert max(w, h) <= 1568
+        assert w * h <= 1_100_000
+
+    def test_opus_47_clips_at_2576_edge_for_retina(self):
+        """A raw Retina capture (3024x1964) gets clipped to 2576px long edge on Opus 4.7."""
+        from tools.computer_use_tool import _compute_scale, set_active_model
+        set_active_model("claude-opus-4-7")
+        w, h, scale = _compute_scale(3024, 1964)
+        assert max(w, h) == 2576
+        assert scale < 1.0
+
+    def test_set_active_model_invalidates_screenshot_cache(self):
+        """Switching models must clear _cached_screenshot_size so display_width_px
+        is recomputed for the new model's resolution limit."""
+        from tools.computer_use_tool import set_active_model
+        import tools.computer_use_tool as cu
+        cu._cached_screenshot_size = (1300, 845)  # simulate prior screenshot
+        set_active_model("claude-opus-4-7")
+        assert cu._cached_screenshot_size is None
 
 
 class TestNativeToolDefinition:

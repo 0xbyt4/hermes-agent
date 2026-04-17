@@ -81,13 +81,51 @@ def set_approval_callback(cb):
 # Constants
 # ---------------------------------------------------------------------------
 
-# Anthropic recommends max 1568px on longest edge for screenshots
+# Anthropic recommends max 1568px on longest edge for screenshots on
+# pre-Opus-4.7 models (Opus 4.6, Sonnet 4.6, etc.). Server-side auto-downscales
+# images over ~1,150,000 pixels (~1533 tokens). If exceeded, Claude sees a
+# smaller image than declared in display_width_px/display_height_px, causing
+# coordinate mismatch. 1,100,000 leaves headroom.
 _MAX_SCREENSHOT_EDGE = 1568
-# Anthropic auto-downscales images over ~1,150,000 pixels (~1533 tokens).
-# If we exceed this, Claude sees a smaller image than we declare in
-# display_width_px/display_height_px, causing coordinate mismatch.
-# Use 1,100,000 as safe limit (leaves headroom).
 _MAX_SCREENSHOT_PIXELS = 1_100_000
+
+# Opus 4.7 supports up to 2576px long edge with 1:1 image-to-coordinate mapping
+# (no server-side downscale, no scaling math needed). Per
+# https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
+# raising the limit preserves sub-pixel detail for small UI elements like
+# 12px traffic light buttons that get crushed to ~5 image pixels under
+# the 1568/1.1MP defaults.
+_OPUS_47_MAX_SCREENSHOT_EDGE = 2576
+_OPUS_47_MAX_SCREENSHOT_PIXELS: Optional[int] = None  # No pixel limit for Opus 4.7
+
+# Active model name set by run_agent before each computer_use call.
+# Used to pick per-model resolution limits.
+_active_model: Optional[str] = None
+
+
+def set_active_model(model_name: Optional[str]) -> None:
+    """Record the agent's active model so screenshot resolution limits
+    can be selected per-model. Called from run_agent before computer_use
+    is invoked. Pass None to revert to defaults."""
+    global _active_model, _cached_screenshot_size
+    new_model = (model_name or "").strip().lower() or None
+    if new_model != _active_model:
+        # Resolution limits change → invalidate screenshot dim cache so the
+        # next get_native_tool_definition() recomputes display_width_px.
+        _cached_screenshot_size = None
+    _active_model = new_model
+
+
+def _resolution_limits() -> Tuple[int, Optional[int]]:
+    """Return (max_edge, max_pixels) for the active model.
+
+    Opus 4.7 gets the higher 2576px limit and no pixel cap (1:1 coords).
+    All other models keep the conservative 1568px / 1.1MP defaults.
+    """
+    m = _active_model or ""
+    if "opus-4-7" in m or "opus-4.7" in m:
+        return _OPUS_47_MAX_SCREENSHOT_EDGE, _OPUS_47_MAX_SCREENSHOT_PIXELS
+    return _MAX_SCREENSHOT_EDGE, _MAX_SCREENSHOT_PIXELS
 
 # Actions that modify system state — require user approval
 _DESTRUCTIVE_ACTIONS = frozenset({
@@ -226,10 +264,14 @@ def _compute_scale(actual_w: int, actual_h: int) -> Tuple[int, int, float]:
     is 1300px — a 13% coordinate mismatch on the first turn.
     """
     import math as _math
+    max_edge, max_pixels = _resolution_limits()
     long_edge = max(actual_w, actual_h)
     total_pixels = actual_w * actual_h
-    edge_scale = min(1.0, _MAX_SCREENSHOT_EDGE / long_edge)
-    pixel_scale = min(1.0, _math.sqrt(_MAX_SCREENSHOT_PIXELS / total_pixels))
+    edge_scale = min(1.0, max_edge / long_edge)
+    pixel_scale = (
+        min(1.0, _math.sqrt(max_pixels / total_pixels))
+        if max_pixels is not None else 1.0
+    )
     scale = min(edge_scale, pixel_scale)
     if scale >= 1.0:
         return actual_w, actual_h, 1.0
@@ -299,16 +341,20 @@ def _take_screenshot() -> Tuple[str, int, int, str]:
             img_w, img_h = logical_w, logical_h
 
         # Further downscale if logical resolution exceeds Anthropic's limits.
-        # Two constraints: max edge (1568px) and max total pixels (~1.15MP).
-        # Exceeding either causes Anthropic to auto-downscale the image,
-        # making Claude see different dimensions than display_width_px/display_height_px,
-        # which causes coordinate mismatch (Claude targets wrong pixels).
+        # Limits are model-dependent: Opus 4.7 supports up to 2576px long edge
+        # with no pixel cap and 1:1 image-to-coordinate mapping. Pre-Opus-4.7
+        # models (Sonnet 4.6, Opus 4.6, etc.) cap at 1568px / ~1.1MP — server
+        # auto-downscales beyond that, causing display_width_px mismatch.
         import math as _math
+        max_edge, max_pixels = _resolution_limits()
         total_pixels = img_w * img_h
         long_edge = max(img_w, img_h)
 
-        edge_scale = min(1.0, _MAX_SCREENSHOT_EDGE / long_edge)
-        pixel_scale = min(1.0, _math.sqrt(_MAX_SCREENSHOT_PIXELS / total_pixels))
+        edge_scale = min(1.0, max_edge / long_edge)
+        pixel_scale = (
+            min(1.0, _math.sqrt(max_pixels / total_pixels))
+            if max_pixels is not None else 1.0
+        )
         scale = min(edge_scale, pixel_scale)
 
         if scale < 1.0:

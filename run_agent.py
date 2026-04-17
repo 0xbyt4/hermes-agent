@@ -7200,7 +7200,10 @@ class AIAgent:
         if "computer" not in self.valid_tool_names:
             return None
         try:
-            from tools.computer_use_tool import get_native_tool_definition
+            from tools.computer_use_tool import get_native_tool_definition, set_active_model
+            # Inform the tool of the active model so it can pick the right
+            # screenshot resolution limit (Opus 4.7 = 2576px, others = 1568px).
+            set_active_model(self.model)
             return [get_native_tool_definition()]
         except Exception as e:
             logger.debug("Failed to load native computer_use tool definition: %s", e)
