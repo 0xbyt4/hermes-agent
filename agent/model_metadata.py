@@ -1095,11 +1095,15 @@ def estimate_messages_tokens_rough(messages: List[Dict[str, Any]]) -> int:
 
     Excludes base64 image data from ``_anthropic_content_blocks`` which would
     massively overcount tokens (a single screenshot's base64 is ~1MB of chars
-    but only costs ~1,465 API tokens).  Instead, each image block is counted
-    as a flat 1,500 tokens (Anthropic formula: width*height/750 for typical
-    1300x845 screenshots).
+    but only costs ~1,874 API tokens on Opus 4.7 native resolution).  Each
+    image block is counted as a flat estimate using Anthropic's
+    ``width * height / 750`` formula:
+    - Opus 4.7 native 1470x956 = 1,874 tokens (no server downscale, 1:1 coords)
+    - Pre-Opus-4.7 1300x845 downsample = 1,465 tokens
+    Use 1,874 as the conservative default: matches Opus 4.7 exactly and slightly
+    overestimates pre-Opus-4.7 (safe — triggers compression early rather than late).
     """
-    _IMAGE_TOKEN_ESTIMATE = 1500
+    _IMAGE_TOKEN_ESTIMATE = 1874
     total = 0
     for msg in messages:
         if not isinstance(msg, dict):

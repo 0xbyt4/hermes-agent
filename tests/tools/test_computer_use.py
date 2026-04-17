@@ -60,6 +60,14 @@ class TestComputeScale:
         w, h, _ = _compute_scale(3840, 2160)
         assert max(w, h) <= 1568
 
+    def test_zero_dimensions_returns_identity_no_crash(self):
+        """Headless/locked screen can yield (0, 0); must not ZeroDivisionError."""
+        from tools.computer_use_tool import _compute_scale, set_active_model
+        set_active_model(None)
+        assert _compute_scale(0, 0) == (0, 0, 1.0)
+        assert _compute_scale(1, 0) == (1, 0, 1.0)
+        assert _compute_scale(0, 1) == (0, 1, 1.0)
+
     def test_pixel_limit_binds_over_edge_limit(self):
         """When aspect ratio is near-square, pixel limit (1.1MP) binds before edge limit (1568px).
 
@@ -116,6 +124,36 @@ class TestModelGatedResolutionLimits:
         from tools.computer_use_tool import _resolution_limits, set_active_model
         set_active_model("claude-opus-4.7")
         assert _resolution_limits() == (2576, None)
+
+    def test_opus_47_dated_version_recognised(self):
+        """Dated snapshot like `claude-opus-4-7-20251201` must still match."""
+        from tools.computer_use_tool import _resolution_limits, set_active_model
+        set_active_model("claude-opus-4-7-20251201")
+        assert _resolution_limits() == (2576, None)
+
+    def test_opus_47_provider_prefixed_aliases(self):
+        """OpenRouter, Bedrock, Vertex prefixes preserve the match."""
+        from tools.computer_use_tool import _resolution_limits, set_active_model
+        for alias in [
+            "anthropic/claude-opus-4-7",
+            "anthropic.claude-opus-4-7-v1:0",
+            "global.anthropic.claude-opus-4-7",
+            "claude-opus-4-7@default",
+        ]:
+            set_active_model(alias)
+            assert _resolution_limits() == (2576, None), f"{alias!r} should match"
+
+    def test_hypothetical_opus_4_70_rejected(self):
+        """Substring `in` check would have matched `opus-4-70`; regex boundary must reject."""
+        from tools.computer_use_tool import _resolution_limits, set_active_model
+        set_active_model("claude-opus-4-70")
+        assert _resolution_limits() == (1568, 1_100_000)
+
+    def test_hypothetical_opus_4_72_rejected(self):
+        """Same defense against `opus-4-72`."""
+        from tools.computer_use_tool import _resolution_limits, set_active_model
+        set_active_model("claude-opus-4-72")
+        assert _resolution_limits() == (1568, 1_100_000)
 
     def test_opus_47_no_downscale_at_logical_macbook_resolution(self):
         """1470x956 stays full-resolution on Opus 4.7 (was downsampled to 1300x845 on Sonnet)."""

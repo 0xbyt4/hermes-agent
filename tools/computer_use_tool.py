@@ -25,6 +25,7 @@ import base64
 import json
 import logging
 import os
+import re as _re
 import subprocess
 import sys
 import tempfile
@@ -116,6 +117,13 @@ def set_active_model(model_name: Optional[str]) -> None:
     _active_model = new_model
 
 
+# Matches `opus-4-7` or `opus-4.7` as a word boundary — rejects future hypothetical
+# `opus-4-70`/`opus-4-72` false positives while still accepting dated versions like
+# `claude-opus-4-7-20251201`, provider prefixes (`anthropic/claude-opus-4-7`,
+# `anthropic.claude-opus-4-7-v1:0`), and variant suffixes (`-latest`, `-thinking`).
+_OPUS_47_RE = _re.compile(r"opus-4[.-]7(?!\d)")
+
+
 def _resolution_limits() -> Tuple[int, Optional[int]]:
     """Return (max_edge, max_pixels) for the active model.
 
@@ -123,7 +131,7 @@ def _resolution_limits() -> Tuple[int, Optional[int]]:
     All other models keep the conservative 1568px / 1.1MP defaults.
     """
     m = _active_model or ""
-    if "opus-4-7" in m or "opus-4.7" in m:
+    if _OPUS_47_RE.search(m):
         return _OPUS_47_MAX_SCREENSHOT_EDGE, _OPUS_47_MAX_SCREENSHOT_PIXELS
     return _MAX_SCREENSHOT_EDGE, _MAX_SCREENSHOT_PIXELS
 
@@ -154,7 +162,6 @@ _BLOCKED_KEY_COMBOS = {
 # level because prompt-level guardrails can be bypassed via injection.
 # Only patterns with high confidence of malicious intent are blocked;
 # ambiguous patterns (passwords, credit cards) are left to the model.
-import re as _re
 _BLOCKED_TYPE_PATTERNS = [
     # Remote code execution
     _re.compile(r"curl\s+.+\|\s*(ba)?sh", _re.IGNORECASE),      # curl ... | bash
@@ -267,6 +274,12 @@ def _compute_scale(actual_w: int, actual_h: int) -> Tuple[int, int, float]:
     max_edge, max_pixels = _resolution_limits()
     long_edge = max(actual_w, actual_h)
     total_pixels = actual_w * actual_h
+    # Degenerate case: pyautogui.size() or sips could report 0 on a headless/
+    # locked display. Returning identity avoids ZeroDivisionError — downstream
+    # screenshot capture will either succeed (real dimensions) or raise a
+    # descriptive error itself.
+    if long_edge <= 0 or total_pixels <= 0:
+        return actual_w, actual_h, 1.0
     edge_scale = min(1.0, max_edge / long_edge)
     pixel_scale = (
         min(1.0, _math.sqrt(max_pixels / total_pixels))
