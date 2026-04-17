@@ -1057,16 +1057,13 @@ _COMPUTER_USE_SCHEMA = {
     },
 }
 
-try:
-    from tools.registry import registry
+from tools.registry import registry
 
-    registry.register(
-        name="computer",
-        toolset="computer_use",
-        schema=_COMPUTER_USE_SCHEMA,
-        handler=lambda args, **kw: handle_computer_use(args, **kw),
-        check_fn=check_computer_use_requirements,
-        emoji="\U0001f5a5",  # desktop computer emoji
-    )
-except Exception as e:
-    logger.debug("Computer use tool registration skipped: %s", e)
+registry.register(
+    name="computer",
+    toolset="computer_use",
+    schema=_COMPUTER_USE_SCHEMA,
+    handler=lambda args, **kw: handle_computer_use(args, **kw),
+    check_fn=check_computer_use_requirements,
+    emoji="\U0001f5a5",  # desktop computer emoji
+)
