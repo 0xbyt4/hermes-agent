@@ -28,7 +28,7 @@ Control a macOS desktop via the `computer` tool — screenshots, mouse, keyboard
 1. **Screenshot first** — always see the screen before acting
 2. **Screenshot after** — verify every action worked
 3. **Never assume focus** — verify which app is active before typing
-4. **Use cursor for GUI tasks** — hover-verify-click is reliable for buttons, menus, icons, and UI elements. Use keyboard shortcuts for text editing, app switching, and well-known commands
+4. **Use cursor for GUI tasks** — direct `left_click coordinate=[x,y]` works for normal-sized targets (buttons, menus, icons, tabs, links). Reserve `hover-verify` (mouse_move → screenshot → left_click) for small or adjacent targets where a miss is costly: traffic lights, densely packed toolbar icons, or when two clickables sit within <20px. Keyboard shortcuts still preferred for text editing, app switching, and well-known commands.
 5. **MEDIA tag for gateway** — extract the `MEDIA:/tmp/hermes_screenshot_<id>.png` path from the screenshot result's `text_summary` and include it in your response
 6. **Terminal as fallback** — `osascript`, `open`, `pbcopy`/`pbpaste` are always available when GUI fails
 
@@ -239,6 +239,9 @@ the one you intend. Always click the target window first, then `command+m`.
 | Close window | `command+w` |
 | Quit app | `command+q` |
 | Minimize | `command+m` |
+| Minimize all (frontmost app) | `command+option+m` |
+| Hide app | `command+h` |
+| Hide all others | `command+option+h` |
 | Full screen | `command+control+f` |
 | Force quit menu | `command+option+Escape` |
 | Undo | `command+z` |
@@ -564,6 +567,49 @@ computer action=zoom, region=[x1, y1, x2, y2]
 - Coordinate accuracy ~1-2px after scaling — cursor placement is precise
 - Cannot detect Touch Bar interactions
 
+## Desktop Organization
+
+### Chrome yellow button greyed out (pitfall):
+Chrome's yellow minimize button appears grey/disabled when the address bar has focus. Fix: click anywhere on the page body first to return focus to the content area, then hover over the traffic light — the yellow button will become active again. Only then click it.
+
+### Traffic light button coordinates vary per window (pitfall):
+Each window's title bar sits at a different y position depending on where it is on screen — do NOT assume fixed coordinates. The three buttons are ~25px apart: red ≈ x-25, yellow ≈ x, green ≈ x+25 relative to yellow center. If the target window is clearly in front (menu bar says its app, traffic lights are colored red/yellow/green), a direct `left_click coordinate=[x,y]` normally lands cleanly. Drop to hover-verify only when the screenshot shows multiple windows' title bars close together or the target button is adjacent (<20px) to a destructive alternative.
+
+### Hovering yellow button triggers window tiling menu (macOS Sequoia+):
+On macOS Sequoia and later, hovering over the green button shows a tiling menu. If you hover too close to green while aiming for yellow, this menu pops up. Press Escape to dismiss it, then aim more precisely at yellow (further left, away from green). If the tiling menu keeps appearing, use `command+m` after clicking the window to bring it to front instead.
+
+### Minimize all open windows:
+Do NOT click yellow minimize buttons one by one — it's slow and error-prone (tiny targets, wrong windows getting focus). Instead:
+1. For each app visible in the Dock with an indicator dot: `command+h` hides it instantly
+2. Or use `command+option+m` to minimize all windows of the frontmost app, then `command+Tab` to next app and repeat
+3. Fastest: `fn+f11` or `command+mission_control` to show desktop (doesn't minimize, just reveals desktop)
+
+**Pitfall — Terminal yellow button triggers "Terminate" dialog**: If Terminal has a running process (Claude Code, a server, etc.), clicking the yellow minimize button shows a "Terminate / Cancel" dialog instead of minimizing. Always click Cancel, then use `command+h` to hide Terminal instead of the yellow button.
+
+**CRITICAL — Never minimize the Terminal running Hermes itself**: When a "minimize all open apps" task is requested, check if the frontmost Terminal is running Hermes gateway/agent (look for `gateway.run`, `hermes-agent`, or similar in the title bar/content). If yes, SKIP it entirely — do not minimize, do not `cmd+h`. Minimizing triggers the Terminate dialog; accidentally confirming it kills the agent process mid-task. Even `cmd+h` is risky if the user expects to see live output. Leave that Terminal alone and explicitly report the substitution to the user ("Terminal'i bıraktım çünkü Hermes orada çalışıyor").
+
+**Pitfall — Inactive window traffic lights**: Clicking the yellow button on an inactive (non-frontmost) window sometimes only ACTIVATES the window instead of minimizing it. Behavior is inconsistent across macOS versions and apps. Reliable pattern: click the window body first to bring it to front (or `osascript` activate), screenshot to verify it is frontmost, THEN click the yellow button.
+
+**Pitfall — Modal dialog from another app blocks minimize**: If app A has an open Open/Save dialog that visually overlays app B's window, clicking B's yellow minimize button does nothing — focus belongs to A's modal. Symptom: repeated yellow clicks on a visible window have no effect. Fix: close/dismiss the modal dialog first (kırmızı X or Escape on the dialog), then minimize the underlying window. Example encountered: Numbers "Open" dialog overlaying a Safari window — Safari's minimize was dead until the Numbers dialog was closed.
+
+**Pitfall — Sarı/kırmızı confusion on inactive windows**: When hover-verifying traffic lights on an inactive window, the buttons are all grey until hover reveals colors. If cursor drifts between hover and click (e.g. a zoom call intervenes), you may click red (close) thinking it is yellow (minimize), and lose work. Mitigation: zoom AFTER mouse_move to confirm cursor is on yellow (middle button, orange/yellow fill visible), then `left_click` with no coordinate to click at current cursor position. Do NOT re-issue coordinates between zoom and click.
+
+**Pitfall — Settings/Preferences windows ignore minimize click**: Some apps (Claude desktop app, some Electron apps) render their Settings/Preferences as a window with visible, colored traffic lights — the yellow minimize button looks fully enabled (minus icon on hover). But clicking it does nothing: the click is received but the window does not minimize. These are effectively semi-modal preference panels where only close (red) works. Symptom: hover shows yellow colored + minus icon, click registers with no error, window stays put. Fix: do not retry — either close with red X, or hide the whole app with `cmd+h` via osascript. Do NOT spend multiple clicks trying to minimize a Settings window.
+
+**Pitfall — Page-level modal blocks browser minimize**: A webpage showing a login/consent modal overlay (e.g. Nous Research portal with its own welcome dialog, Google sign-in prompt) can render Safari/Chrome's yellow minimize button unresponsive. The browser chrome's traffic light looks active and colored, but clicking it does nothing — the in-page modal is holding interactive focus. Symptom: two clean yellow clicks with no change, no dialog, no error. Fix: do not retry a third time. Either dismiss the in-page modal first (click its X or press Escape inside the page), OR fall back to `cmd+h` to hide the whole app. This is different from an OS-level modal blocking another app — here the modal is inside the browser tab itself.
+
+**Strategy — cmd+h as cursor-only-compatible fallback**: When asked to minimize windows via cursor only and the yellow button fails (Settings windows, page-level modals, cross-app modal overlays), `cmd+h` to hide the whole app is the cleanest fallback. It preserves the spirit of "minimize not close" (app keeps running, windows reappear on relaunch) and avoids burning retry budget on a button that will never work. Do NOT close with red X as the first fallback — losing user work is worse than breaking cursor-only purity. Pattern when a yellow click fails twice: (1) `cmd+h` on the active app, (2) continue with remaining windows, (3) report the substitution to the user at the end.
+
+**Pitfall — Zoom verification does not guarantee button identity on inactive windows**: On an inactive window, all three traffic lights appear as grey circles of similar size. A zoom call confirms cursor position but NOT which button (red/yellow/green) is under it, because colors only appear on hover AND only if the window is frontmost. Symptom: cursor looks centered on "a grey circle" in zoom, click fires, but the wrong button (red = close) was clicked instead of yellow = minimize — window closes, work lost. Reliable fix: (1) bring window to front FIRST (`osascript -e 'tell application "X" to activate'` or click window body), (2) wait 0.3s for traffic lights to colorize, (3) screenshot to confirm red/yellow/green colors are visible, (4) ONLY THEN hover + zoom + click the yellow button. Never hover-click traffic lights on a greyed-out inactive window.
+
+### Organize desktop icons:
+Right-click on empty desktop area → "Sort By" → "Name" (or Kind, Date, Size) for instant professional grid alignment. This is ALWAYS faster than dragging icons individually. Use "Clean Up By" for alignment without reordering.
+
+**Pitfall**: Right-clicking near the right edge of the desktop triggers the macOS widgets panel. Right-click in the CENTER of the desktop.
+
+### Moving scattered desktop items:
+If only 1-3 items are out of place, drag them individually. If more than 3, use right-click → Sort By → Name to auto-arrange everything at once.
+
 ## Workflow Examples
 
 ### Click a specific UI element:
@@ -633,6 +679,25 @@ filename text first to give it real focus, then cmd+a to select all, then type.
 **Desktop note**: `Return` key OPENS files/folders on the desktop — it does NOT
 enter rename mode. Use Method 1 (right-click > Rename) for desktop items.
 
+**Desktop rename — working pattern (confirmed via trial and error):**
+Right-click > Rename activates visual rename mode but does NOT give real keyboard
+focus. `Return` key on desktop OPENS folders, it does NOT enter rename mode.
+The only reliable pattern:
+```
+1. left_click the folder/file once — select it
+2. wait 0.8s
+3. left_click on the NAME LABEL (below the icon, not the icon itself) — activates edit mode
+4. key: command+a — select all text in the name field
+5. type: NewName
+6. key: Return — confirm
+7. screenshot — verify renamed
+```
+The slow second click (step 3) on the label is the critical step — it gives the
+NSTextField real keyboard focus. Without it, type/cmd+a go nowhere.
+Do NOT use right-click > Rename as the activation step — it's unreliable on desktop.
+Do NOT use Return to enter rename mode on the desktop — it opens the folder instead.
+Do NOT use the File menu > Rename — it closes without activating the text field.
+
 **Pitfall — cmd+a visual artifact on desktop**: After cmd+a in rename mode on the
 desktop, ALL desktop icons appear highlighted blue. This is misleading — the text
 field still has the name text selected. Just type immediately after cmd+a.
@@ -695,7 +760,23 @@ triggers the macOS widgets panel. Right-click in the CENTER of the desktop inste
 - `cmd+shift+d` jumps to Desktop in any save/open dialog
 - If file exists, macOS shows "Replace?" — click Replace to overwrite
 
-### Drag a single file:
+**TextEdit already running pitfall**: If TextEdit is already open and you launch it via Spotlight, macOS shows an Open File dialog instead of a blank document. Click "New Document" button in the bottom-left of that dialog to get a fresh document.
+
+### Prefer Finder over direct desktop drag (IMPORTANT)
+
+Dragging files directly on the desktop into folders is error-prone — overlapping icons, hard-to-target folders, and no visual feedback make it unreliable. Prefer this flow for any desktop file moves:
+
+```
+1. left_click Finder icon in Dock — open Finder
+2. key: command+shift+d — navigate to Desktop
+3. Select files in Finder list view (click + cmd+click for multi-select)
+4. left_click_drag from selected file to target folder in the same Finder window
+5. screenshot — verify files moved into folder
+```
+
+List view (cmd+2) makes targets much clearer and drag-and-drop far more reliable than working on the raw desktop.
+
+### Drag a single file (when Finder is already open):
 ```
 1. screenshot — see files
 2. zoom on source file icon — find exact center coordinates
