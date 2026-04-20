@@ -297,19 +297,21 @@ def _requires_bearer_auth(base_url: str | None) -> bool:
 
 
 def _common_betas_for_base_url(base_url: str | None) -> list[str]:
-    """Return the beta headers that are safe for the configured endpoint.
+    """Return the commonly-supported beta headers for the configured endpoint.
 
     MiniMax's Anthropic-compatible endpoints (Bearer-auth) reject requests
     that include Anthropic's ``fine-grained-tool-streaming`` beta — every
     tool-use message triggers a connection error.  Strip that beta for
     Bearer-auth endpoints while keeping all other betas intact.
+
+    This is a pure helper: it returns only the betas that are universally
+    compatible.  Anthropic-only betas (computer-use, context-management)
+    are added separately by ``build_anthropic_client`` on the branches
+    where the endpoint is known to be api.anthropic.com.
     """
-    betas = list(_COMMON_BETAS)
     if _requires_bearer_auth(base_url):
-        betas = [b for b in betas if b != _TOOL_STREAMING_BETA]
-    if _is_anthropic_official_endpoint(base_url):
-        betas.extend(_ANTHROPIC_ONLY_BETAS)
-    return betas
+        return [b for b in _COMMON_BETAS if b != _TOOL_STREAMING_BETA]
+    return _COMMON_BETAS
 
 
 def build_anthropic_client(api_key: str, base_url: str = None, timeout: float = None):
@@ -359,9 +361,12 @@ def build_anthropic_client(api_key: str, base_url: str = None, timeout: float = 
             kwargs["default_headers"] = {"anthropic-beta": ",".join(common_betas)}
     elif _is_oauth_token(api_key):
         # OAuth access token / setup-token → Bearer auth + Claude Code identity.
+        # OAuth only routes through api.anthropic.com, so it always gets the
+        # Anthropic-only betas (computer-use, context-management) alongside
+        # the OAuth-specific ones.
         # Anthropic routes OAuth requests based on user-agent and headers;
         # without Claude Code's fingerprint, requests get intermittent 500s.
-        all_betas = common_betas + _OAUTH_ONLY_BETAS
+        all_betas = common_betas + list(_ANTHROPIC_ONLY_BETAS) + _OAUTH_ONLY_BETAS
         kwargs["auth_token"] = api_key
         kwargs["default_headers"] = {
             "anthropic-beta": ",".join(all_betas),
@@ -369,10 +374,16 @@ def build_anthropic_client(api_key: str, base_url: str = None, timeout: float = 
             "x-app": "cli",
         }
     else:
-        # Regular API key → x-api-key header + common betas
+        # Regular API key → x-api-key header + common betas.
+        # Anthropic-only betas (computer-use, context-management) are added
+        # only when the endpoint is api.anthropic.com itself; third-party
+        # proxies are already handled above and never reach this branch.
         kwargs["api_key"] = api_key
-        if common_betas:
-            kwargs["default_headers"] = {"anthropic-beta": ",".join(common_betas)}
+        betas = list(common_betas)
+        if _is_anthropic_official_endpoint(normalized_base_url):
+            betas.extend(_ANTHROPIC_ONLY_BETAS)
+        if betas:
+            kwargs["default_headers"] = {"anthropic-beta": ",".join(betas)}
 
     return _anthropic_sdk.Anthropic(**kwargs)
 
