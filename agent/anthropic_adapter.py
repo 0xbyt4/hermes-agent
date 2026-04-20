@@ -142,15 +142,18 @@ def _forbids_sampling_params(model: str) -> bool:
     return any(v in model for v in _NO_SAMPLING_PARAMS_SUBSTRINGS)
 
 
-# Beta headers for enhanced features (sent with ALL auth types).
-# As of Opus 4.7 (2026-04-16), both of these are GA on Claude 4.6+ — the
-# beta headers are still accepted (harmless no-op) but not required. Kept
-# here so older Claude (4.5, 4.1) + third-party Anthropic-compat endpoints
-# that still gate on the headers continue to get the enhanced features.
-# Migration guide: remove these if you no longer support ≤4.5 models.
+# Beta headers safe to send to any Anthropic-wire endpoint (including
+# third-party Anthropic-compatible providers like MiniMax, Azure AI
+# Foundry, AWS Bedrock proxies, etc.).
 _COMMON_BETAS = [
     "interleaved-thinking-2025-05-14",
     "fine-grained-tool-streaming-2025-05-14",
+]
+# Beta headers that only Anthropic's official API (api.anthropic.com)
+# recognises.  Third-party providers reject unknown betas or route
+# requests incorrectly when these are present, so gate them to the
+# official endpoint only.
+_ANTHROPIC_ONLY_BETAS = [
     "computer-use-2025-11-24",
     "context-management-2025-06-27",
 ]
@@ -158,6 +161,18 @@ _COMMON_BETAS = [
 # the fine-grained tool streaming beta is present.  Omit it so tool calls
 # fall back to the provider's default response path.
 _TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
+
+
+def _is_anthropic_official_endpoint(base_url: str) -> bool:
+    """True when the endpoint is Anthropic's own API (default or api.anthropic.com)."""
+    if not base_url:
+        return True
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(base_url).hostname or "").lower()
+        return host == "api.anthropic.com" or host.endswith(".anthropic.com")
+    except Exception:
+        return False
 
 # Fast mode beta — enables the ``speed: "fast"`` request parameter for
 # significantly higher output token throughput on Opus 4.6 (~2.5x).
@@ -289,9 +304,12 @@ def _common_betas_for_base_url(base_url: str | None) -> list[str]:
     tool-use message triggers a connection error.  Strip that beta for
     Bearer-auth endpoints while keeping all other betas intact.
     """
+    betas = list(_COMMON_BETAS)
     if _requires_bearer_auth(base_url):
-        return [b for b in _COMMON_BETAS if b != _TOOL_STREAMING_BETA]
-    return _COMMON_BETAS
+        betas = [b for b in betas if b != _TOOL_STREAMING_BETA]
+    if _is_anthropic_official_endpoint(base_url):
+        betas.extend(_ANTHROPIC_ONLY_BETAS)
+    return betas
 
 
 def build_anthropic_client(api_key: str, base_url: str = None, timeout: float = None):

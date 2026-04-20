@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -255,6 +256,8 @@ class TestActionExecution:
         self.mock_pag.scroll.assert_called_once_with(-5)
         assert "scrolled" in result
 
+    @pytest.mark.skipif(sys.platform != "darwin",
+                        reason="mouse_move uses macOS Quartz for drag-state probing")
     def test_mouse_move(self):
         from tools.computer_use_tool import _execute_action
         result = _execute_action("mouse_move", {"coordinate": [100, 200]})
